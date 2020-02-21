@@ -118,6 +118,14 @@ knownColors =
 --------------------------------------------------------------------------------
 -- * scope \/ type checker
 
+parseAndCheck :: FilePath -> String -> ([Located Message] , Map Location [Info])
+parseAndCheck fname text = ( parseErrs ++ reverse messages , info ) where
+  ei_list   = parseSrc fname text
+  parseErrs = [ Located (Location src src) (ParseErr msg) | (src,msg) <- lefts ei_list ]
+  decls     = rights ei_list
+  CheckState messages info 
+    = execState (checkDeclList emptyScope decls) emptyCheckState
+
 -- | Error messages collected during checking
 data Message
   = NotInScope  Name             -- ^ variable not in scope
@@ -394,12 +402,14 @@ exampleSrc = unlines
   , "nice_col   : Color = #rainbow"
   ]
 
+{-
 testmain = do
   let eilist = parseSrc "example.src" exampleSrc
   let decls = rights eilist
   let CheckState messages info = execState (checkDeclList emptyScope decls) emptyCheckState
   mapM_ print (reverse messages)
   mapM_ print (Map.toList info)
+-}
 
 --------------------------------------------------------------------------------
 -- * misc
