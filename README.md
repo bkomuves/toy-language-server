@@ -80,6 +80,10 @@ $ npm i vscode-languageclient
    have to first save the file for the extension to be activated!
 9. Play around! For example, F2 does scope-aware renaming, and F12 is jump to definition.
 
+You should see something like this:
+
+![screenshot](screenshot.png)
+
 To permanently install the extension, copy the whole project into 
 the extension folder (?):
 
