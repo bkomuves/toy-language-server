@@ -60,6 +60,7 @@ data IDE result = IDE
   , ideDiagnostics   :: result -> [Diag]
   , ideOnHover       :: result -> SrcPos -> Maybe (Location,[String])
   , ideHighlight     :: result -> SrcPos -> [Location]
+  , ideDefinLoc      :: result -> SrcPos -> Maybe Location
   }
 
 data Diag = Diag
@@ -330,6 +331,24 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
       reactorSend $ RspDocumentHighlights $ Core.makeResponseMessage req (J.List hlList) 
 
     ----------------------------------------------------------------------------
+    -- (jump to) definition request
+
+    HandlerRequest (ReqDefinition req) -> do
+      let J.TextDocumentPositionParams doc0 pos _workdone = req ^. J.params
+          doc = req ^. J.params . J.textDocument . J.uri 
+          uri = J.toNormalizedUri doc
+      liftIO $ U.logs $ "definition request at " ++ show (posToSrcPos pos)   
+      liftIO $ U.logs $ "highlight request at " ++ show (posToSrcPos pos)   
+      mbloc <- liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
+        Nothing    -> return Nothing
+        Just table -> case Map.lookup uri table >>= ideResult of
+          Nothing     -> return Nothing
+          Just result -> return $ ideDefinLoc ide result (posToSrcPos pos)
+      reactorSend $ RspDefinition $ Core.makeResponseMessage req $ case mbloc of
+        Just loc -> J.SingleLoc (J.Location doc (locToRange loc))
+        Nothing  -> J.MultiLoc []    -- ?? how to return failure
+
+    ----------------------------------------------------------------------------
 
     -- something unhandled above
     HandlerRequest om -> do
@@ -366,6 +385,7 @@ lspHandlers rin = def
     ---------------------------------------------
   , Core.hoverHandler                             = Just $ passHandler rin ReqHover
   , Core.documentHighlightHandler                 = Just $ passHandler rin ReqDocumentHighlights
+  , Core.definitionHandler                        = Just $ passHandler rin ReqDefinition
 --  , Core.renameHandler                            = Just $ passHandler rin ReqRename
 --  , Core.codeActionHandler                        = Just $ passHandler rin ReqCodeAction
 --  , Core.executeCommandHandler                    = Just $ passHandler rin ReqExecuteCommand

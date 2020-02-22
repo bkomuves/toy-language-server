@@ -30,6 +30,7 @@ myIDE = IDE
   , ideDiagnostics   = myDiag
   , ideOnHover       = myHover
   , ideHighlight     = myHighlight
+  , ideDefinLoc      = myDefinLoc
   }
 
 -- error diagnostics
@@ -60,15 +61,24 @@ myHover (CheckResult message nfos usage) pos =
 -- highlight variable usage
 myHighlight :: CheckResult -> SrcPos -> [Location]
 myHighlight (CheckResult messages nfos usage) pos = case findInnerMost pos usage of
-  Just (thisloc,list) -> thisloc:list
+  Just (defloc,list) -> defloc:list
   Nothing -> case findInnerMost pos nfos of
-    Nothing          -> [] 
+    Nothing              -> [] 
     Just (thisloc,infos) -> case [ defloc | DefinedAt defloc <- infos ] of
       []         -> []
       (defloc:_) -> case Map.lookup defloc usage of
         Nothing    -> []
         Just list  -> (defloc:list)
-        
+
+-- find definition
+myDefinLoc :: CheckResult -> SrcPos -> Maybe Location
+myDefinLoc (CheckResult messages nfos usage) pos = 
+  case findInnerMost pos nfos of
+    Nothing              -> Nothing
+    Just (thisloc,infos) -> case [ defloc | DefinedAt defloc <- infos ] of
+      []         -> Nothing
+      (defloc:_) -> Just defloc
+      
 --------------------------------------------------------------------------------
 -- recall the definitions from ToyLang
 
