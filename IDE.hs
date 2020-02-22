@@ -52,12 +52,16 @@ myHover :: CheckResult -> SrcPos -> Maybe (Location,[String])
 myHover (CheckResult message nfos usage) pos = 
   case findInnerMost pos nfos of
     Nothing         -> Nothing
-    Just (loc,list) -> case catMaybes (map worker list) of
-      [] -> Nothing
-      ls -> Just (loc, ls) 
+    Just (loc,list) -> 
+      let mbtoken = case [ tok | NfoToken tok <- list ] of 
+            []      -> Nothing
+            (tok:_) -> Just tok
+      in  case catMaybes (map (worker mbtoken) list) of
+            [] -> Nothing
+            ls -> Just (loc, ls) 
   where
-    worker info = case info of
-      HasType ty -> Just (prettyType ty)
+    worker mbtoken info = case info of
+      HasType ty -> Just $ maybe "" id mbtoken ++ " :: " ++ prettyType ty
       _          -> Nothing
       
 -- highlight variable usage
