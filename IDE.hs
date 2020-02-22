@@ -32,19 +32,20 @@ myIDE = IDE
   , ideHighlight     = myHighlight
   , ideDefinLoc      = myDefinLoc
   , ideCompletion    = myCompletion
+  , ideRename        = myRename
   }
 
 -- error diagnostics
 myDiag :: CheckResult -> [Diag]
 myDiag (CheckResult messages nfos usage) = catMaybes $ map worker messages where
   worker (Located loc msg) = Just $ case msg of
-    NotInScope  name     -> Diag loc DsError $ "variable " ++ quoted name ++ " not in scope"
-    Shadowing   name loc -> Diag loc DsInfo  $ quoted name ++ " shadows earlier definition"
-    NotAColor   col      -> Diag loc DsError $ quoted col ++ " is not a color"
-    DeclInvalid name     -> Diag loc DsError $ "declaration " ++ quoted name ++ " is invalid"
-    TypeError   text     -> Diag loc DsError text
-    Warning     text     -> Diag loc DsWarning text
-    ParseErr    text     -> Diag loc DsError $ "cannot parse: " ++ text        
+    NotInScope  name      -> Diag loc DsError $ "variable " ++ quoted name ++ " not in scope"
+    Shadowing   name ploc -> Diag loc DsInfo  $ quoted name ++ " shadows earlier definition at " ++ prettyLoc ploc
+    NotAColor   col       -> Diag loc DsError $ quoted col ++ " is not a color"
+    DeclInvalid name      -> Diag loc DsError $ "declaration " ++ quoted name ++ " is invalid"
+    TypeError   text      -> Diag loc DsError text
+    Warning     text      -> Diag loc DsWarning text
+    ParseErr    text      -> Diag loc DsError $ "cannot parse: " ++ text        
 
 -- type information when hovering        
 myHover :: CheckResult -> SrcPos -> Maybe (Location,[String])
@@ -71,6 +72,11 @@ myHighlight (CheckResult messages nfos usage) pos = case findInnerMost pos usage
         Nothing    -> []
         Just list  -> (defloc:list)
 
+-- globally rename variable 
+myRename :: CheckResult -> SrcPos -> String -> [(Location,String)]
+myRename checkResult pos newname = 
+  [ (l,newname) | l <- myHighlight checkResult pos ]
+  
 -- find definition
 myDefinLoc :: CheckResult -> SrcPos -> Maybe Location
 myDefinLoc (CheckResult messages nfos usage) pos = 

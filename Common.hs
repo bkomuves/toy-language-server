@@ -58,6 +58,14 @@ class ShowF f where
 instance ShowF Located where
   showF = show
 
+prettySrcPos :: SrcPos -> String
+prettySrcPos (SrcPos ln col) = "L" ++ show ln ++ ":" ++ show col
+
+prettyLoc :: Location -> String
+prettyLoc (Location pos1@(SrcPos ln1 col1) pos2@(SrcPos ln2 col2)) 
+  | ln1 == ln2  = "L" ++ show ln1 ++ ":" ++ show col1 ++ "-" ++ show col2
+  | otherwise   = prettySrcPos pos1 ++ "-" ++ prettySrcPos pos2
+
 --------------------------------------------------------------------------------
 
 findInnerMost :: SrcPos -> Map.Map Location a -> Maybe (Location,a)

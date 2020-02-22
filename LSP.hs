@@ -63,6 +63,7 @@ data IDE result = IDE
   , ideHighlight     :: result -> SrcPos -> [Location]
   , ideDefinLoc      :: result -> SrcPos -> Maybe Location
   , ideCompletion    :: result -> SrcPos -> [(String, Maybe J.CompletionItemKind)]
+  , ideRename        :: result -> SrcPos -> String -> [(Location,String)]
   }
 
 data Diag = Diag
@@ -322,7 +323,7 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
     -- we should send back some tooltip info 
 
     HandlerRequest (ReqHover req) -> do
-      let J.TextDocumentPositionParams doc0 pos _workdone = req ^. J.params
+      let J.TextDocumentPositionParams tdoc pos _workdone = req ^. J.params
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
       liftIO $ U.logs $ "hover request at " ++ show (posToSrcPos pos)   
@@ -346,7 +347,7 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
     -- we should send back a list of ranges
     
     HandlerRequest (ReqDocumentHighlights req) -> do
-      let J.TextDocumentPositionParams doc0 pos _workdone = req ^. J.params
+      let J.TextDocumentPositionParams tdoc pos _workdone = req ^. J.params
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
       liftIO $ U.logs $ "highlight request at " ++ show (posToSrcPos pos)   
@@ -363,7 +364,7 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
     -- (jump to) definition request
 
     HandlerRequest (ReqDefinition req) -> do
-      let J.TextDocumentPositionParams doc0 pos _workdone = req ^. J.params
+      let J.TextDocumentPositionParams tdoc pos _workdone = req ^. J.params
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
       liftIO $ U.logs $ "definition request at " ++ show (posToSrcPos pos)   
@@ -380,7 +381,7 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
     -- completion request
 
     HandlerRequest (ReqCompletion req) -> do
-      let J.CompletionParams doc0 pos _ctx _workdone = req ^. J.params
+      let J.CompletionParams tdoc pos _ctx _workdone = req ^. J.params
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
       liftIO $ U.logs $ "completion request at " ++ show (posToSrcPos pos)   
@@ -394,7 +395,27 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
       reactorSend $ RspCompletion $ Core.makeResponseMessage req 
         $ J.CompletionList $ J.CompletionListType False (J.List items)
 
-   ----------------------------------------------------------------------------
+    ----------------------------------------------------------------------------
+    -- rename request
+
+    HandlerRequest (ReqRename req) -> do
+      let J.RenameParams tdoc pos newName _workdone = req ^. J.params
+          doc = req ^. J.params . J.textDocument . J.uri 
+          uri = J.toNormalizedUri doc
+      liftIO $ U.logs $ "rename request at " ++ show (posToSrcPos pos)   
+      list <- liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
+        Nothing    -> return []
+        Just table -> case Map.lookup uri table >>= ideResult of
+          Nothing     -> return []
+          Just result -> return $ ideRename ide result (posToSrcPos pos) (T.unpack newName)
+      liftIO $ U.logs $ "renaming = " ++ show list
+      let edits = J.List [ J.TextEdit (locToRange loc) (T.pack newText) | (loc,newText) <- list ]
+      let vtdoc = J.VersionedTextDocumentIdentifier doc (Just 0) -- Nothing  -- ???
+      let docedit = J.TextDocumentEdit vtdoc edits   
+      reactorSend $ RspRename $ Core.makeResponseMessage req 
+        $ J.WorkspaceEdit Nothing $ Just (J.List [docedit])
+        
+    ----------------------------------------------------------------------------
 
     -- something unhandled above
     HandlerRequest om -> do
@@ -433,7 +454,7 @@ lspHandlers rin = def
   , Core.documentHighlightHandler                 = Just $ passHandler rin ReqDocumentHighlights
   , Core.definitionHandler                        = Just $ passHandler rin ReqDefinition
   , Core.completionHandler                        = Just $ passHandler rin ReqCompletion
---  , Core.renameHandler                            = Just $ passHandler rin ReqRename
+  , Core.renameHandler                            = Just $ passHandler rin ReqRename
 --  , Core.codeActionHandler                        = Just $ passHandler rin ReqCodeAction
 --  , Core.executeCommandHandler                    = Just $ passHandler rin ReqExecuteCommand
   }

@@ -179,6 +179,10 @@ checkDeclList scope (d:ds) = do
    
 checkDecl :: Scope -> Decl -> CheckM (Scope, Maybe Type)
 checkDecl scope (Decl (Located loc name) (Located _ ty) body) = do
+  addInfo loc (NfoToken name)
+  case Map.lookup name scope of
+    Just (Located prevloc _) -> addMessage loc $ Shadowing name prevloc 
+    Nothing -> return ()
   mbty <- checkExpr scope body
   if mbty == Just ty
     then addInfo loc (HasType ty)
@@ -209,6 +213,7 @@ checkExpr = go where
         addMessage loc (NotInScope name)
         return Nothing
       Just (Located defloc ty) -> do
+        addInfo loc (NfoToken  name  )
         addInfo loc (DefinedAt defloc)
         return (Just ty)
     
