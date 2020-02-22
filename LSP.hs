@@ -5,6 +5,7 @@
 {-# LANGUAGE BangPatterns, ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts, FlexibleInstances #-}
 {-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 module LSP where
 
 --------------------------------------------------------------------------------
@@ -61,6 +62,7 @@ data IDE result = IDE
   , ideOnHover       :: result -> SrcPos -> Maybe (Location,[String])
   , ideHighlight     :: result -> SrcPos -> [Location]
   , ideDefinLoc      :: result -> SrcPos -> Maybe Location
+  , ideCompletion    :: result -> SrcPos -> [(String, Maybe J.CompletionItemKind)]
   }
 
 data Diag = Diag
@@ -92,6 +94,33 @@ mapReplaceIfExists :: Ord k => k -> v -> Map k v -> Map k v
 mapReplaceIfExists !k !v = Map.alter f k where
   f Nothing  = Nothing
   f (Just _) = Just v
+
+--------------------------------------------------------------------------------
+
+defCompletionItem :: J.CompletionItem
+defCompletionItem = J.CompletionItem
+  { J._label = T.empty            -- The label of this completion item. By default also the text that is inserted when selecting this completion.
+  , J._kind  = Nothing
+  , J._detail = Nothing           -- A human-readable string with additional information about this item, like type or symbol information.
+  , J._documentation = Nothing    -- A human-readable string that represents a doc-comment.
+  , J._deprecated = Nothing        -- Indicates if this item is deprecated.
+  , J._preselect = Nothing        -- Select this item when showing. *Note* that only one completion item can be selected and that the tool / client decides which item that is. The rule is that the *first* item of those that match best is selected.
+  , J._sortText = Nothing         -- A string that should be used when filtering a set of completion items. When falsy the label is used.
+  , J._filterText = Nothing            --  A string that should be used when filtering a set of completion items. When falsy the label is used.
+  , J._insertText = Nothing            --  A string that should be inserted a document when selecting this completion. When falsy the label is used.
+  , J._insertTextFormat = Nothing      --  The format of the insert text. The format applies to both the insertText property and the newText property of a provided textEdit.
+  , J._textEdit = Nothing              --  An edit which is applied to a document when selecting this completion. When an edit is provided the value of insertText is ignored.
+  , J._additionalTextEdits = Nothing   --  An optional array of additional text edits that are applied when selecting this completion. Edits must not overlap with the main edit nor with themselves.
+  , J._commitCharacters = Nothing      --  An optional set of characters that when pressed while this completion is active will accept it first and then type that character. *Note* that all commit characters should have `length=1` and that superfluous characters will be ignored.
+  , J._command = Nothing               --  An optional command that is executed *after* inserting this completion. *Note* that additional modifications to the current document should be described with the additionalTextEdits-property.
+  , J._xdata = Nothing 
+  }
+  
+mkCompletionItem :: String -> Maybe J.CompletionItemKind -> J.CompletionItem
+mkCompletionItem s mbkind = defCompletionItem
+  { J._label = T.pack s   
+  , J._kind  = mbkind
+  }
 
 --------------------------------------------------------------------------------
 
@@ -338,7 +367,6 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
       liftIO $ U.logs $ "definition request at " ++ show (posToSrcPos pos)   
-      liftIO $ U.logs $ "highlight request at " ++ show (posToSrcPos pos)   
       mbloc <- liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
         Nothing    -> return Nothing
         Just table -> case Map.lookup uri table >>= ideResult of
@@ -349,6 +377,24 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
         Nothing  -> J.MultiLoc []    -- ?? how to return failure
 
     ----------------------------------------------------------------------------
+    -- completion request
+
+    HandlerRequest (ReqCompletion req) -> do
+      let J.CompletionParams doc0 pos _ctx _workdone = req ^. J.params
+          doc = req ^. J.params . J.textDocument . J.uri 
+          uri = J.toNormalizedUri doc
+      liftIO $ U.logs $ "completion request at " ++ show (posToSrcPos pos)   
+      clist <- liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
+        Nothing    -> return []
+        Just table -> case Map.lookup uri table >>= ideResult of
+          Nothing     -> return []
+          Just result -> return $ ideCompletion ide result (posToSrcPos pos)
+      -- liftIO $ U.logs $ "completion list = " ++ show (map fst clist)   
+      let items = [ mkCompletionItem label mbkind | (label,mbkind) <- clist ]
+      reactorSend $ RspCompletion $ Core.makeResponseMessage req 
+        $ J.CompletionList $ J.CompletionListType False (J.List items)
+
+   ----------------------------------------------------------------------------
 
     -- something unhandled above
     HandlerRequest om -> do
@@ -386,6 +432,7 @@ lspHandlers rin = def
   , Core.hoverHandler                             = Just $ passHandler rin ReqHover
   , Core.documentHighlightHandler                 = Just $ passHandler rin ReqDocumentHighlights
   , Core.definitionHandler                        = Just $ passHandler rin ReqDefinition
+  , Core.completionHandler                        = Just $ passHandler rin ReqCompletion
 --  , Core.renameHandler                            = Just $ passHandler rin ReqRename
 --  , Core.codeActionHandler                        = Just $ passHandler rin ReqCodeAction
 --  , Core.executeCommandHandler                    = Just $ passHandler rin ReqExecuteCommand

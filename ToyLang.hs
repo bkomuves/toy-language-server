@@ -82,7 +82,18 @@ knownColors =
   , "magenta"
   , "cyan"
   , "rainbow"
+  -- some more colors to have interesting completion examples
+  , "gold"
+  , "grey"
+  , "graphite"
+  , "banana-yellow"
+  , "brown"
+  , "blood-red"
+  , "mahagony"
   ]
+
+completeColor :: String -> [String]
+completeColor c = filter (isPrefixOf $ map toLower c) knownColors
 
 --------------------------------------------------------------------------------
 -- * check the whole document
@@ -130,6 +141,7 @@ data Message
 data Info
   = DefinedAt !Location      -- ^ where was this variable defined
   | HasType   !Type          -- ^ what type this expression has 
+  | NfoToken  !String        -- ^ the underlying text
   deriving (Show,Generic,NFData)
 
 data CheckState = CheckState 
@@ -206,6 +218,7 @@ checkExpr = go where
           when (n == 0  ) $ addMessage loc (Warning "go back to school, zero is not a number!!!")
           when (n > 1000) $ addMessage loc (Warning "numbers bigger than 1000 do not exist!")
         ColorLit col -> do
+          addInfo loc (NfoToken ('#':col))
           unless (elem col knownColors) $ addMessage loc (NotAColor col) 
           when   (col == "rainbow")     $ addMessage loc (Warning "rainbow is not really a color!")
         _ -> nop
@@ -293,7 +306,7 @@ natP = read <$> some digitChar
 colorP :: Parser String
 colorP = do
   char '#'
-  cs <- some letterChar
+  cs <- many (letterChar <|> char '-')
   return cs  
   
 literalP :: Parser Literal

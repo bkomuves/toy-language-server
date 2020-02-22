@@ -37,7 +37,7 @@ data Location
   deriving (Eq,Ord,Show,Generic,NFData)
 
 isInside :: SrcPos -> Location -> Bool
-isInside pos (Location a b) = pos >= a && pos < b
+isInside pos (Location a b) = pos >= a && pos <= b
 
 locSpan :: Location -> Location -> Location
 locSpan (Location a1 b1) (Location a2 b2) = Location (min a1 a2) (max b1 b2)

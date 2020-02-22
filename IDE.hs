@@ -1,6 +1,6 @@
 
--- | This module connects the language implementation with the @haskell-lsp@
--- library
+-- | This module connects the language implementation with 
+-- the [abstraction layer on the top of the] @haskell-lsp@ library
 
 module Main where
 
@@ -11,7 +11,7 @@ import Data.Maybe
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 
-import Language.Haskell.LSP.Types ( DiagnosticSeverity(..) )
+import Language.Haskell.LSP.Types ( DiagnosticSeverity(..) , CompletionItemKind(..) )
 
 import Common
 import ToyLang
@@ -31,6 +31,7 @@ myIDE = IDE
   , ideOnHover       = myHover
   , ideHighlight     = myHighlight
   , ideDefinLoc      = myDefinLoc
+  , ideCompletion    = myCompletion
   }
 
 -- error diagnostics
@@ -79,6 +80,18 @@ myDefinLoc (CheckResult messages nfos usage) pos =
       []         -> Nothing
       (defloc:_) -> Just defloc
       
+-- completion
+-- NB: completion apparently cannot start with special characters like `#`...
+myCompletion :: CheckResult -> SrcPos -> [(String,Maybe CompletionItemKind)]
+myCompletion (CheckResult messages nfos usage) pos = 
+  case findInnerMost pos nfos of
+    Nothing              -> []
+    Just (thisloc,infos) -> case [ () | HasType (ColorT) <- infos ] of
+      []    -> []
+      (_:_) -> case [ tok | NfoToken tok <- infos ] of
+        []      -> []
+        (tok:_) -> [ (color, Just CiColor) | color <- completeColor (tail tok) ]
+         
 --------------------------------------------------------------------------------
 -- recall the definitions from ToyLang
 
