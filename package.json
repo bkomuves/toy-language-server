@@ -1,0 +1,17 @@
+{
+  "name": "toy-ide-vscode-ext",
+  "displayName": "toy-ide-vscode-ext",
+  "description": "Toy Haskell IDE example VS Code extension",
+  "version": "0.0.1",
+  "repository": "https://github.com/bkomuves/toy-language-server",
+  "engines": {
+    "vscode": "^1.40.0"
+  },
+  "activationEvents": [
+    "*"
+  ],
+  "main": "./extension.js",
+  "dependencies": {
+    "vscode-languageclient": "^6.1.1"
+  }
+}

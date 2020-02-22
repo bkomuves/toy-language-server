@@ -2,21 +2,22 @@
 Minimalistic language server (LSP) implementation
 =================================================
 
-Language server protocol example for a toy language, implemented in Haskell,
+Language server protocol example for a toy language implemented in Haskell,
 using the [haskell-lsp](https://hackage.haskell.org/package/haskell-lsp) 
 library under the hood.
 
-The "language" itself is very minimal, to keep the implementation simple, 
+The "language" itself is very minimal to keep the implementation simple, 
 but the LSP support aims to be somewhat realistic.
 
 IDE features
 ------------
 
-* ~~syntax highlighting~~ apparently this is not supported by LSP... (what. the. actual. fuck) 
+* ~~syntax highlighting~~ - apparently this is not supported by LSP... (what. the. actual. fuck) 
 * parsing, scope and type errors 
-* variable scope highlighting, scope-aware renaming
+* variable scope highlighting, shadowing info
+* scope-aware renaming
 * type information on hovering
-* tab-completion for colors
+* tab-completion (for colors)
 * jump to definition
 * ad-hoc diagnostic (warnings for large numbers and rainbow color)
 
@@ -55,9 +56,34 @@ ugly_col   : Color = #black
 nice_col   : Color = #rainbow
 ```
 
-Installation instructions
--------------------------
+Installation instructions (for VS Code)
+--------------------------------------
 
-TODO
+1. Install `haskell-lsp` and `megaparsec`:
+```
+$ cabal install haskell-lsp
+$ cabal install megaparsec
+```
+2. Build the server executable:
+```
+$ ghc -O --make -threaded IDE.hs -o IDE.exe
+```
+3. Install `npm` (if not already installed)
+4. run the following (in the project directory!):
+```
+$ npm i vscode-languageclient 
+```
+5. Install VS Code (if not already installed)
+6. Open the project directory in VS Code
+7. Press F5 to test the language server
+8. Open a new text file and paste the example program above. NB: Apparently you
+   have to first save the file for the extension to be activated!
+9. Play around! For example, F2 does scope-aware renaming, and F12 is jump to definition.
+
+To permanently install the extension, copy the whole project into 
+the extension folder (?):
+
+* On Windows: `%USERPROFILE%\.vscode\extensions`
+* On macOs / Linux: `~/.vscode/extensions`
 
 

@@ -1,5 +1,6 @@
-example-vscode
-standalone-vscode-ext
+node_modules
+package-lock.json
 *.hi
 *.o
-xx.yy
+IDE
+IDE.exe
