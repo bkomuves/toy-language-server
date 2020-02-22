@@ -49,12 +49,17 @@ import Common
 lspServerName :: T.Text
 lspServerName = T.pack "toy-ide"
 
+logging = True
+logFile = "/tmp/toy-ide.log"
+sessionLogFile = "/tmp/toy-ide-session.log"
+
 --------------------------------------------------------------------------------
 
 data IDE result = IDE
   { ideCheckDocument :: T.Text -> result
   , ideDiagnostics   :: result -> [Diag]
   , ideOnHover       :: result -> SrcPos -> Maybe (Location,[String])
+  , ideHighlight     :: result -> SrcPos -> [Location]
   }
 
 data Diag = Diag
@@ -154,8 +159,9 @@ run ide global = flip E.catches handlers $ do
         , Core.onStartup = dispatcher
         }
   flip E.finally finalProc $ do
-    Core.setupLogger (Just "/tmp/lsp-toy.log") [] L.DEBUG
-    CTRL.run iniCallbacks (lspHandlers rin) lspOptions (Just "/tmp/lsp-toy-session.log") --Nothing    
+    when logging $ Core.setupLogger (Just logFile) [] L.DEBUG
+    let session_log = if logging then Just sessionLogFile else Nothing
+    CTRL.run iniCallbacks (lspHandlers rin) lspOptions session_log    
   where
     handlers = [ E.Handler ioExcept
                , E.Handler someExcept
@@ -282,9 +288,9 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
       return ()
 
     ----------------------------------------------------------------------------
-
-    -- hover request     
+    -- hover request         
     -- we should send back some tooltip info 
+
     HandlerRequest (ReqHover req) -> do
       let J.TextDocumentPositionParams doc0 pos _workdone = req ^. J.params
           doc = req ^. J.params . J.textDocument . J.uri 
@@ -305,6 +311,24 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
                 return $ Just ht
       reactorSend $ RspHover $ Core.makeResponseMessage req mbHover 
         
+    ----------------------------------------------------------------------------
+    -- highlight request
+    -- we should send back a list of ranges
+    
+    HandlerRequest (ReqDocumentHighlights req) -> do
+      let J.TextDocumentPositionParams doc0 pos _workdone = req ^. J.params
+          doc = req ^. J.params . J.textDocument . J.uri 
+          uri = J.toNormalizedUri doc
+      liftIO $ U.logs $ "highlight request at " ++ show (posToSrcPos pos)   
+      hlList <- liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
+        Nothing    -> return []
+        Just table -> case Map.lookup uri table >>= ideResult of
+          Nothing     -> return []
+          Just result -> do
+            let hlList1 = ideHighlight ide result (posToSrcPos pos)
+            return [ J.DocumentHighlight (locToRange loc) Nothing | loc <- hlList1 ]
+      reactorSend $ RspDocumentHighlights $ Core.makeResponseMessage req (J.List hlList) 
+
     ----------------------------------------------------------------------------
 
     -- something unhandled above
@@ -341,6 +365,7 @@ lspHandlers rin = def
   , Core.didCloseTextDocumentNotificationHandler  = Just $ passHandler rin NotDidCloseTextDocument
     ---------------------------------------------
   , Core.hoverHandler                             = Just $ passHandler rin ReqHover
+  , Core.documentHighlightHandler                 = Just $ passHandler rin ReqDocumentHighlights
 --  , Core.renameHandler                            = Just $ passHandler rin ReqRename
 --  , Core.codeActionHandler                        = Just $ passHandler rin ReqCodeAction
 --  , Core.executeCommandHandler                    = Just $ passHandler rin ReqExecuteCommand

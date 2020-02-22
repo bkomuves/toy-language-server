@@ -10,6 +10,7 @@ import Control.Monad.State.Strict
 import Data.Void
 import Data.Either
 import Data.Char
+import Data.List
 
 import qualified Data.Map as Map ; import Data.Map (Map)
 
@@ -84,18 +85,35 @@ knownColors =
   ]
 
 --------------------------------------------------------------------------------
--- * scope \/ type checker
+-- * check the whole document
 
-type    CheckResult = CheckState
-pattern CheckResult msg nfo = CheckState msg nfo
-
+data CheckResult = CheckResult
+  { chkMessages :: [Located Message]
+  , chkInfo     :: Map Location [Info]
+  , chkUsage    :: Map Location [Location]
+  }
+  deriving (Show,Generic,NFData)
+  
+computeCheckResult :: [Located Message] -> Map Location [Info] -> CheckResult
+computeCheckResult messages info = CheckResult messages info usage where
+  usage = foldl' f Map.empty (Map.toList info) 
+  f !old (useloc, infos) = foldl' (h useloc) old infos
+  h !useloc old info = case info of
+      DefinedAt defloc -> Map.alter (g useloc) defloc old
+      _ -> old
+  g !loc Nothing     = Just [loc] 
+  g !loc (Just locs) = Just (loc:locs)
+  
 parseAndCheck :: FilePath -> String -> CheckResult
-parseAndCheck fname text = CheckResult (parseErrs ++ reverse messages) info where
+parseAndCheck fname text = computeCheckResult (parseErrs ++ reverse messages) info where
   ei_list   = parseSrc fname text
   parseErrs = [ Located (Location src src) (ParseErr msg) | (src,msg) <- lefts ei_list ]
   decls     = rights ei_list
   CheckState messages info 
     = execState (checkDeclList emptyScope decls) emptyCheckState
+
+--------------------------------------------------------------------------------
+-- * scope \/ type checker
 
 -- | Error messages collected during checking
 data Message
@@ -115,8 +133,8 @@ data Info
   deriving (Show,Generic,NFData)
 
 data CheckState = CheckState 
-  { messages :: [Located Message]
-  , info     :: Map Location [Info]
+  { messages :: ![Located Message]
+  , info     :: !(Map Location [Info])
   }
   deriving (Show,Generic,NFData)
 
