@@ -1,5 +1,5 @@
 
-{-# LANGUAGE BangPatterns, DeriveFunctor #-}
+{-# LANGUAGE BangPatterns, PatternSynonyms, DeriveFunctor, DeriveGeneric, DeriveAnyClass #-}
 module ToyLang where
 
 --------------------------------------------------------------------------------
@@ -13,45 +13,13 @@ import Data.Char
 
 import qualified Data.Map as Map ; import Data.Map (Map)
 
+import GHC.Generics (Generic)
+import Control.DeepSeq
+
 import Text.Megaparsec hiding ( State )
 import Text.Megaparsec.Char
 
---------------------------------------------------------------------------------
--- * locations
-
--- megaparsec is way too over-engineered...
-data SrcPos 
-  = SrcPos !Int !Int
-  deriving (Eq,Ord,Show)
-  
-toSrcPos :: SourcePos -> SrcPos
-toSrcPos (SourcePos fn line col) = SrcPos (unPos line) (unPos col)
-
-data Location
-  = Location !SrcPos !SrcPos
-  deriving (Eq,Ord,Show)
-
-isInside :: SrcPos -> Location -> Bool
-isInside pos (Location a b) = pos >= a && pos < b
-
-locSpan :: Location -> Location -> Location
-locSpan (Location a1 b1) (Location a2 b2) = Location (min a1 a2) (max b1 b2)
-
-data Located a 
-  = Located !Location !a  
-  deriving (Show,Functor)
-
-location :: Located a -> Location
-location (Located loc _) = loc
-
-forgetLocation :: Located a -> a
-forgetLocation (Located _ y) = y
-
-class ShowF f where
-  showF :: Show a => f a -> String
-  
-instance ShowF Located where
-  showF = show
+import Common
   
 --------------------------------------------------------------------------------
 -- * the AST
@@ -62,7 +30,7 @@ data Type
   = BoolT
   | NatT
   | ColorT
-  deriving (Eq,Show)
+  deriving (Eq,Show,Generic,NFData)
 
 prettyType :: Type -> String
 prettyType ty = case ty of
@@ -118,8 +86,11 @@ knownColors =
 --------------------------------------------------------------------------------
 -- * scope \/ type checker
 
-parseAndCheck :: FilePath -> String -> ([Located Message] , Map Location [Info])
-parseAndCheck fname text = ( parseErrs ++ reverse messages , info ) where
+type    CheckResult = CheckState
+pattern CheckResult msg nfo = CheckState msg nfo
+
+parseAndCheck :: FilePath -> String -> CheckResult
+parseAndCheck fname text = CheckResult (parseErrs ++ reverse messages) info where
   ei_list   = parseSrc fname text
   parseErrs = [ Located (Location src src) (ParseErr msg) | (src,msg) <- lefts ei_list ]
   decls     = rights ei_list
@@ -135,19 +106,19 @@ data Message
   | DeclInvalid Name             -- ^ this declaration is invalid (for any reasons)
   | Warning     String           -- ^ a warning
   | ParseErr    String           -- ^ parse error
-  deriving Show
+  deriving (Show,Generic,NFData)
   
 -- | Information collected during checking
 data Info
   = DefinedAt !Location      -- ^ where was this variable defined
   | HasType   !Type          -- ^ what type this expression has 
-  deriving Show
+  deriving (Show,Generic,NFData)
 
 data CheckState = CheckState 
   { messages :: [Located Message]
   , info     :: Map Location [Info]
   }
-  deriving Show
+  deriving (Show,Generic,NFData)
 
 emptyCheckState :: CheckState
 emptyCheckState = CheckState [] Map.empty

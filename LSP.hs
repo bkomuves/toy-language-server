@@ -2,7 +2,9 @@
 -- | An simple abstraction layer above the rather complex 
 -- and low-level @haskell-lsp@ library.
 
-{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns, ScopedTypeVariables #-}
+{-# LANGUAGE FlexibleContexts, FlexibleInstances #-}
+{-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
 module LSP where
 
 --------------------------------------------------------------------------------
@@ -16,9 +18,15 @@ import Control.Concurrent.STM.TChan
 import Control.Exception as E
 import Control.Lens
 
+import GHC.Generics (Generic)
+import Control.DeepSeq
+
 import Data.Default
 import qualified Data.Text as T
 import qualified Data.Rope.UTF16 as Rope
+
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 
 import System.Exit
 import System.IO.Unsafe as Unsafe
@@ -29,76 +37,125 @@ import           Language.Haskell.LSP.Diagnostics
 import           Language.Haskell.LSP.Messages
 import qualified Language.Haskell.LSP.Types       as J
 import qualified Language.Haskell.LSP.Types.Lens  as J
--- import qualified Language.Haskell.LSP.Utility     as U
 import           Language.Haskell.LSP.VFS
 
+import qualified Language.Haskell.LSP.Utility     as U
+import qualified System.Log.Logger                as L
+
+import Common
 
 --------------------------------------------------------------------------------
 
+lspServerName :: T.Text
+lspServerName = T.pack "toy-ide"
+
+--------------------------------------------------------------------------------
+
+data IDE result = IDE
+  { ideCheckDocument :: T.Text -> result
+  , ideDiagnostics   :: result -> [Diag]
+  , ideOnHover       :: result -> SrcPos -> Maybe (Location,[String])
+  }
+
+data Diag = Diag
+  { diagLocation :: !Location
+  , diagSeverity :: !J.DiagnosticSeverity
+  , diagMessage  :: !String
+  }
+  deriving (Generic,NFData)
+   
 data IDEState result
   = IdeChecking !ThreadId    -- ^ we are in the process of checking the source
   | IdeChecked  !result      -- ^ checking is done, but no feedback sent yet
   | IdeDone     !result      -- ^ feedback was also sent
+
+ideResult :: IDEState result -> Maybe result
+ideResult state = case state of
+  IdeChecking {} -> Nothing
+  IdeChecked res -> Just res
+  IdeDone    res -> Just res
   
-{-# NOINLINE theGlobalState #-}
-theGlobalState :: MVar (Map J.NormalizedUri IDEState)
-theGlobalState = Unsafe.unsafePerformIO $ newMVar Map.empty
+type IDETable result = Map J.NormalizedUri (IDEState result)  
 
 adjustMVar :: MVar a -> (a -> a) -> IO ()
 adjustMVar mv f = do
   x <- takeMVar mv
   putMVar mv $! f x
 
+mapReplaceIfExists :: Ord k => k -> v -> Map k v -> Map k v 
+mapReplaceIfExists !k !v = Map.alter f k where
+  f Nothing  = Nothing
+  f (Just _) = Just v
+
 --------------------------------------------------------------------------------
 
-data IDE result = IDE
-  { ideCheckDocument :: T.Text -> result
-  , ideDiagnostics   :: result -> IO [Diag]
-  , ideOnHover       :: SrcPos -> IO (Maybe String)
-  }
-
-data Diag = Diag
-  { diagSeverity :: !DiagnosticSeverity
-  , diagLocation :: !Location
-  , diagMessage  :: !String
-  }
+-- why the fuck do i need this shit ?!
+class SomeVersion v where versionToMaybeInt :: v -> Maybe Int
+instance SomeVersion (Maybe Int) where versionToMaybeInt = id
+instance SomeVersion Int         where versionToMaybeInt = Just
   
-checkDocument :: J.NormalizedUri -> Maybe FilePath -> T.Text -> IO ()
-checkDocument = do
-  ...
+checkDocument 
+  :: (NFData result, SomeVersion ver, J.HasUri textdoc J.Uri, J.HasVersion textdoc ver)
+  => IDE result -> MVar (IDETable result) 
+  -> textdoc -> Maybe FilePath -> T.Text -> R () ()
+checkDocument ide global tdoc mbFilePath text = do
+  let uri = tdoc ^. J.uri . to J.toNormalizedUri
+      ver = tdoc ^. J.version
+  liftIO $ U.logs "checking document..."
+  let !result = ideCheckDocument ide text
+  -- liftIO $ print result
+  rnf result `seq` (liftIO $ adjustMVar global (mapReplaceIfExists uri (IdeChecked result)))
+  liftIO $ U.logs "computing diagnostics..."
+  let !diags = ideDiagnostics ide result
+  sendDiags uri (versionToMaybeInt ver) diags    -- version ???
+  rnf diags `seq` (liftIO $ adjustMVar global (mapReplaceIfExists uri (IdeDone result)))
+  liftIO $ U.logs "done."
+  return ()
    
-updateDocument :: J.NormalizedUri -> Maybe FilePath -> T.Text -> IO ()
-updateDocument uri mbFileName text = do
-  table <- takeMVar theGlobalState
-  case Map.lookup uri table of
-    Just (IdeChecking threadid) -> killThread threadid
-    _ -> return () 
-  threadid <- forkIO $ checkDocument uri mbFilePath text
-  putMVar $! theGlobalState (Map.insert (IdeChecking threadid))
+updateDocument 
+  :: (NFData result, SomeVersion ver, J.HasUri textdoc J.Uri, J.HasVersion textdoc ver)
+  => IDE result -> MVar (IDETable result) 
+  -> textdoc -> Maybe FilePath -> T.Text -> R () ()
+updateDocument ide global tdoc mbFileName text = do
+  let uri = tdoc ^. J.uri . to J.toNormalizedUri
+  lf <- ask
+  liftIO $ U.logs "updating document..."
+  liftIO $ do
+    table <- takeMVar global
+    case Map.lookup uri table of
+      Just (IdeChecking old_threadid) -> killThread old_threadid
+      _ -> return () 
+    threadid <- forkIO $ flip runReaderT lf $ checkDocument ide global tdoc mbFileName text
+    putMVar global $! (Map.insert uri (IdeChecking threadid) table)
 
-closeDocument :: J.NormalizedUri  -> IO ()
-closeDocument uri = adjustMVar theGlobalState (Map.delete uri)
+closeDocument 
+  :: NFData result => IDE result -> MVar (IDETable result) 
+  -> J.NormalizedUri  -> R () ()
+closeDocument ide global uri = do
+  liftIO $ adjustMVar global (Map.delete uri)
   
 --------------------------------------------------------------------------------
 -- * interfacing with @haskell-lsp@
 
-lspMain :: IO ()
-lspMain = do
-  run >>= \r -> case r of
+lspMain :: forall result. NFData result => IDE result -> IO ()
+lspMain ide = do
+  global <- newMVar Map.empty :: IO (MVar (IDETable result))
+  run ide global >>= \r -> case r of
     0 -> exitSuccess
     c -> exitWith . ExitFailure $ c
    
-run :: IO Int
-run = flip E.catches handlers $ do    
+run  :: NFData result => IDE result -> MVar (IDETable result) -> IO Int
+run ide global = flip E.catches handlers $ do    
   rin <- atomically newTChan :: IO (TChan ReactorInput)
-  let dispatcher lf = forkIO (reactor lf rin) >> return Nothing
+  let dispatcher lf = forkIO (reactor ide global lf rin) >> return Nothing
   let iniCallbacks = Core.InitializeCallbacks
         { Core.onInitialConfiguration = \_ -> Right ()
         , Core.onConfigurationChange  = \_ -> Right ()
         , Core.onStartup = dispatcher
         }
   flip E.finally finalProc $ do
-    CTRL.run iniCallbacks (lspHandlers rin) lspOptions Nothing    
+    Core.setupLogger (Just "/tmp/lsp-toy.log") [] L.DEBUG
+    CTRL.run iniCallbacks (lspHandlers rin) lspOptions (Just "/tmp/lsp-toy-session.log") --Nothing    
   where
     handlers = [ E.Handler ioExcept
                , E.Handler someExcept
@@ -133,35 +190,66 @@ nextLspReqId = do
   liftIO f
   
 --------------------------------------------------------------------------------
+-- LSP starts from 0, Megaparsec starts from 1...
 
+srcPosToPos :: SrcPos -> J.Position
+srcPosToPos (SrcPos l c) = J.Position (l-1) (c-1)
+
+posToSrcPos :: J.Position -> SrcPos
+posToSrcPos (J.Position l c) = SrcPos (l+1) (c+1)
+
+locToRange :: Location -> J.Range
+locToRange (Location p1 p2) = J.Range (srcPosToPos p1) (srcPosToPos p2)
+
+rangeToLoc :: J.Range -> Location
+rangeToLoc (J.Range p1 p2) = Location (posToSrcPos p1) (posToSrcPos p2) 
+
+--------------------------------------------------------------------------------
+
+sendDiags :: J.NormalizedUri -> Maybe Int -> [Diag] -> R () ()
+sendDiags fileUri version mydiags = do
+  let diags = 
+        [ J.Diagnostic 
+            (locToRange loc)      -- range 
+            (Just severity)       -- severity
+            Nothing               -- code
+            (Just lspServerName)  -- source
+            (T.pack msg)          -- message
+            (Just (J.List []))    -- related info
+        | Diag loc severity msg <- mydiags
+        ]
+  publishDiagnostics 100 fileUri version (partitionBySource diags)
+  
 -- we call this when the document is first loaded or when it changes
 -- updateDocumentLsp :: Core.LspFuncs () -> ? -> ?
-updateDocumentLsp lf doc0 = do
-  let doc      = J.toNormalizedUri doc0
-      fileName = J.uriToFilePath   doc0
-  -- liftIO $ putStrLn $ "updating document " ++ show fileName
+updateDocumentLsp ide global lf doc0 = do
+  let doc      = J.toNormalizedUri (doc0 ^. J.uri)
+      fileName = J.uriToFilePath   (doc0 ^. J.uri)
+  -- liftIO $ U.logs $ "updating document " ++ show fileName
   mdoc <- liftIO $ Core.getVirtualFileFunc lf doc
   case mdoc of
     Just (VirtualFile lsp_ver file_ver str) -> do
-      liftIO $ updateDocument doc fileName (Rope.toText str)
+      updateDocument ide global doc0 fileName (Rope.toText str)
     Nothing -> do
-      liftIO $ putStrLn $ "updateDocumentLsp: vfs returned Nothing"
+      liftIO $ U.logs $ "updateDocumentLsp: vfs returned Nothing"
       
 --------------------------------------------------------------------------------
 
-reactor :: Core.LspFuncs () -> TChan ReactorInput -> IO ()
-reactor lf inp = flip runReaderT lf $ forever $ do
+reactor 
+  :: NFData result => IDE result -> MVar (IDETable result) 
+  -> Core.LspFuncs () -> TChan ReactorInput -> IO ()
+reactor ide global lf inp = flip runReaderT lf $ forever $ do
   inval <- liftIO $ atomically $ readTChan inp
   case inval of
   
     -- response from client   
     HandlerRequest (RspFromClient rm) -> do
-      liftIO $ putStrLn $ "got RspFromClient:" ++ show rm
+      liftIO $ U.logs $ "got RspFromClient:" ++ show rm
       return ()
       
     -- initialized notification   
     HandlerRequest (NotInitialized _notification) -> do
-      liftIO $ putStrLn $ "Initialized Notification"
+      liftIO $ U.logs $ "Initialized Notification"
       -- we could register extra capabilities here, but we are not doing that.
       return ()
 
@@ -169,42 +257,59 @@ reactor lf inp = flip runReaderT lf $ forever $ do
 
     -- open document notification
     HandlerRequest (NotDidOpenTextDocument notification) -> do
-      let doc = notification ^. J.params . J.textDocument . J.uri
-      updateDocumentLsp lf doc
+      let doc = notification ^. J.params . J.textDocument -- . J.uri
+      updateDocumentLsp ide global lf doc
+      return ()
 
     -- save document notification
     HandlerRequest (NotDidSaveTextDocument notification) -> do
-      let doc = notification ^. J.params . J.textDocument . J.uri
+      let doc = notification ^. J.params . J.textDocument -- . J.uri
+--      sendDiags (J.toNormalizedUri (doc ^. J.uri)) Nothing  
+--        [Diag (Location (SrcPos 2 2) (SrcPos 2 2)) J.DsError "fuck this shit / save"]
       return ()
 
     -- close document notification
     HandlerRequest (NotDidCloseTextDocument notification) -> do
       let doc = notification ^. J.params . J.textDocument . J.uri
-      closeDocument (J.toNormalizedUri doc)
+      closeDocument ide global (J.toNormalizedUri doc)
+      return ()
             
     -- change document notification
     -- we should re-parse and update everything!
     HandlerRequest (NotDidChangeTextDocument notification) -> do
-      let doc  = notification ^. J.params . J.textDocument . J.uri 
-      updateDocumentLsp lf doc
+      let doc  = notification ^. J.params . J.textDocument -- . J.uri 
+      updateDocumentLsp ide global lf doc
+      return ()
 
     ----------------------------------------------------------------------------
 
     -- hover request     
     -- we should send back some tooltip info 
     HandlerRequest (ReqHover req) -> do
-      let J.TextDocumentPositionParams _doc pos _workdone = req ^. J.params
-          J.Position line col = pos
-      let ht = Just $ J.Hover ms (Just range)
-          ms = J.HoverContents $ J.markedUpContent (T.pack "lsp-hello") (T.pack $ "TYPE INFO @ " ++ show line ++ ":" ++ show col)
-          range = J.Range pos pos
-      reactorSend $ RspHover $ Core.makeResponseMessage req ht
-
+      let J.TextDocumentPositionParams doc0 pos _workdone = req ^. J.params
+          doc = req ^. J.params . J.textDocument . J.uri 
+          uri = J.toNormalizedUri doc
+      liftIO $ U.logs $ "hover request at " ++ show (posToSrcPos pos)   
+      mbHover <- liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
+        Nothing    -> return Nothing
+        Just table -> case Map.lookup uri table >>= ideResult of
+          Nothing     -> return Nothing
+          Just result -> do
+            let  mbMsg = ideOnHover ide result (posToSrcPos pos)
+            case mbMsg of
+              Nothing -> return Nothing
+              Just (loc,msgs) -> do
+                liftIO $ U.logs $ "ide says: " ++ show msgs   
+                let ms = J.HoverContents $ J.markedUpContent lspServerName (T.pack $ unlines msgs)
+                    ht = J.Hover ms (Just $ locToRange loc)
+                return $ Just ht
+      reactorSend $ RspHover $ Core.makeResponseMessage req mbHover 
+        
     ----------------------------------------------------------------------------
 
     -- something unhandled above
     HandlerRequest om -> do
-      liftIO $ putStrLn $ "got HandlerRequest:" ++ show om
+      liftIO $ U.logs $ "got HandlerRequest:" ++ show om
       return ()
 
 --------------------------------------------------------------------------------
@@ -227,15 +332,16 @@ lspOptions = def
 lspHandlers :: TChan ReactorInput -> Core.Handlers
 lspHandlers rin = def 
   { Core.initializedHandler                       = Just $ passHandler rin NotInitialized
+  , Core.responseHandler                          = Just $ responseHandlerCb rin
+  , Core.cancelNotificationHandler                = Just $ passHandler rin NotCancelRequestFromClient
+    --------------------------------------------
   , Core.didOpenTextDocumentNotificationHandler   = Just $ passHandler rin NotDidOpenTextDocument
   , Core.didSaveTextDocumentNotificationHandler   = Just $ passHandler rin NotDidSaveTextDocument
   , Core.didChangeTextDocumentNotificationHandler = Just $ passHandler rin NotDidChangeTextDocument
   , Core.didCloseTextDocumentNotificationHandler  = Just $ passHandler rin NotDidCloseTextDocument
-  , Core.responseHandler                          = Just $ responseHandlerCb rin
     ---------------------------------------------
---  , Core.renameHandler                            = Just $ passHandler rin ReqRename
   , Core.hoverHandler                             = Just $ passHandler rin ReqHover
---  , Core.cancelNotificationHandler                = Just $ passHandler rin NotCancelRequestFromClient
+--  , Core.renameHandler                            = Just $ passHandler rin ReqRename
 --  , Core.codeActionHandler                        = Just $ passHandler rin ReqCodeAction
 --  , Core.executeCommandHandler                    = Just $ passHandler rin ReqExecuteCommand
   }
@@ -248,7 +354,7 @@ passHandler rin c notification = do
 
 responseHandlerCb :: TChan ReactorInput -> Core.Handler J.BareResponseMessage
 responseHandlerCb _rin resp = do
-  putStrLn $ "got ResponseMessage, ignoring: " ++ show resp      
+  U.logs $ "got ResponseMessage, ignoring: " ++ show resp      
   return ()
  
 --------------------------------------------------------------------------------
