@@ -17,7 +17,7 @@ IDE features
 * variable scope highlighting, shadowing info
 * scope-aware renaming
 * type information on hovering
-* tab-completion (for colors)
+* completion (for colors)
 * jump to definition
 * ad-hoc diagnostic (warnings for large numbers and rainbow color)
 

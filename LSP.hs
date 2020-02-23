@@ -1,6 +1,8 @@
 
 -- | An simple abstraction layer above the rather complex 
 -- and low-level @haskell-lsp@ library.
+--
+-- (loosely based on the example server code in @haskell-lsp@)
 
 {-# LANGUAGE BangPatterns, ScopedTypeVariables #-}
 {-# LANGUAGE FlexibleContexts, FlexibleInstances #-}
@@ -46,15 +48,18 @@ import qualified System.Log.Logger                as L
 import Common
 
 --------------------------------------------------------------------------------
+-- * global config
 
 lspServerName :: T.Text
 lspServerName = T.pack "toy-ide"
 
 logging = True
-logFile = "/tmp/toy-ide.log"
+
+logFile        = "/tmp/toy-ide.log"
 sessionLogFile = "/tmp/toy-ide-session.log"
 
 --------------------------------------------------------------------------------
+-- * our simplified LSP abstraction layer
 
 data IDE result = IDE
   { ideCheckDocument :: T.Text -> result
@@ -86,6 +91,9 @@ ideResult state = case state of
   
 type IDETable result = Map J.NormalizedUri (IDEState result)  
 
+--------------------------------------------------------------------------------
+-- * misc helpers
+
 adjustMVar :: MVar a -> (a -> a) -> IO ()
 adjustMVar mv f = do
   x <- takeMVar mv
@@ -97,16 +105,18 @@ mapReplaceIfExists !k !v = Map.alter f k where
   f (Just _) = Just v
 
 --------------------------------------------------------------------------------
+-- * completion items
 
+-- why isn't this part of @haskell-lsp@?
 defCompletionItem :: J.CompletionItem
 defCompletionItem = J.CompletionItem
-  { J._label = T.empty            -- The label of this completion item. By default also the text that is inserted when selecting this completion.
+  { J._label = T.empty               -- The label of this completion item. By default also the text that is inserted when selecting this completion.
   , J._kind  = Nothing
-  , J._detail = Nothing           -- A human-readable string with additional information about this item, like type or symbol information.
-  , J._documentation = Nothing    -- A human-readable string that represents a doc-comment.
-  , J._deprecated = Nothing        -- Indicates if this item is deprecated.
-  , J._preselect = Nothing        -- Select this item when showing. *Note* that only one completion item can be selected and that the tool / client decides which item that is. The rule is that the *first* item of those that match best is selected.
-  , J._sortText = Nothing         -- A string that should be used when filtering a set of completion items. When falsy the label is used.
+  , J._detail = Nothing              -- A human-readable string with additional information about this item, like type or symbol information.
+  , J._documentation = Nothing       -- A human-readable string that represents a doc-comment.
+  , J._deprecated = Nothing          -- Indicates if this item is deprecated.
+  , J._preselect = Nothing           -- Select this item when showing. *Note* that only one completion item can be selected and that the tool / client decides which item that is. The rule is that the *first* item of those that match best is selected.
+  , J._sortText = Nothing            -- A string that should be used when filtering a set of completion items. When falsy the label is used.
   , J._filterText = Nothing            --  A string that should be used when filtering a set of completion items. When falsy the label is used.
   , J._insertText = Nothing            --  A string that should be inserted a document when selecting this completion. When falsy the label is used.
   , J._insertTextFormat = Nothing      --  The format of the insert text. The format applies to both the insertText property and the newText property of a provided textEdit.
@@ -124,9 +134,10 @@ mkCompletionItem s mbkind = defCompletionItem
   }
 
 --------------------------------------------------------------------------------
+-- * re-check documents
 
--- why the fuck do i need this shit ?!
-class SomeVersion v where versionToMaybeInt :: v -> Maybe Int
+-- seriously...
+class    SomeVersion v where versionToMaybeInt :: v -> Maybe Int
 instance SomeVersion (Maybe Int) where versionToMaybeInt = id
 instance SomeVersion Int         where versionToMaybeInt = Just
   
@@ -227,8 +238,9 @@ nextLspReqId = do
   liftIO f
   
 --------------------------------------------------------------------------------
--- LSP starts from 0, Megaparsec starts from 1...
+-- * conversion between LSP's and our positions
 
+-- LSP starts from 0, Megaparsec starts from 1...
 srcPosToPos :: SrcPos -> J.Position
 srcPosToPos (SrcPos l c) = J.Position (l-1) (c-1)
 
@@ -243,6 +255,7 @@ rangeToLoc (J.Range p1 p2) = Location (posToSrcPos p1) (posToSrcPos p2)
 
 --------------------------------------------------------------------------------
 
+-- | send back diagnostics
 sendDiags :: J.NormalizedUri -> Maybe Int -> [Diag] -> R () ()
 sendDiags fileUri version mydiags = do
   let diags = 
@@ -252,13 +265,16 @@ sendDiags fileUri version mydiags = do
             Nothing               -- code
             (Just lspServerName)  -- source
             (T.pack msg)          -- message
-            (Just (J.List []))    -- related info
+            Nothing               -- related info
         | Diag loc severity msg <- mydiags
         ]
   publishDiagnostics 100 fileUri version (partitionBySource diags)
   
 -- we call this when the document is first loaded or when it changes
--- updateDocumentLsp :: Core.LspFuncs () -> ? -> ?
+updateDocumentLsp 
+  :: (NFData result, SomeVersion ver, J.HasVersion textdoc ver, J.HasUri textdoc J.Uri) 
+  => IDE result -> MVar (IDETable result)
+  -> Core.LspFuncs c -> textdoc -> R () ()
 updateDocumentLsp ide global lf doc0 = do
   let doc      = J.toNormalizedUri (doc0 ^. J.uri)
       fileName = J.uriToFilePath   (doc0 ^. J.uri)
@@ -271,11 +287,29 @@ updateDocumentLsp ide global lf doc0 = do
       liftIO $ U.logs $ "updateDocumentLsp: vfs returned Nothing"
       
 --------------------------------------------------------------------------------
+-- * the main event handler
 
 reactor 
-  :: NFData result => IDE result -> MVar (IDETable result) 
+  :: forall result. NFData result 
+  => IDE result -> MVar (IDETable result) 
   -> Core.LspFuncs () -> TChan ReactorInput -> IO ()
 reactor ide global lf inp = flip runReaderT lf $ forever $ do
+
+  -- common access patterns
+  let ideGetMaybe :: J.NormalizedUri -> (result -> Maybe a) -> R () (Maybe a)
+      ideGetMaybe uri user = liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
+        Nothing    -> return Nothing
+        Just table -> case Map.lookup uri table >>= ideResult of
+          Nothing     -> return Nothing
+          Just result -> return (user result)
+
+  let ideGetList :: J.NormalizedUri -> (result -> [a]) -> R () [a]
+      ideGetList uri user = liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
+        Nothing    -> return []
+        Just table -> case Map.lookup uri table >>= ideResult of
+          Nothing     -> return []
+          Just result -> return (user result)
+
   inval <- liftIO $ atomically $ readTChan inp
   case inval of
   
@@ -294,29 +328,24 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
 
     -- open document notification
     HandlerRequest (NotDidOpenTextDocument notification) -> do
-      let doc = notification ^. J.params . J.textDocument -- . J.uri
+      let doc = notification ^. J.params . J.textDocument 
       updateDocumentLsp ide global lf doc
-      return ()
 
     -- save document notification
     HandlerRequest (NotDidSaveTextDocument notification) -> do
-      let doc = notification ^. J.params . J.textDocument -- . J.uri
---      sendDiags (J.toNormalizedUri (doc ^. J.uri)) Nothing  
---        [Diag (Location (SrcPos 2 2) (SrcPos 2 2)) J.DsError "fuck this shit / save"]
+      -- let doc = notification ^. J.params . J.textDocument 
       return ()
 
     -- close document notification
     HandlerRequest (NotDidCloseTextDocument notification) -> do
-      let doc = notification ^. J.params . J.textDocument . J.uri
-      closeDocument ide global (J.toNormalizedUri doc)
-      return ()
+      let uri = notification ^. J.params . J.textDocument . J.uri
+      closeDocument ide global (J.toNormalizedUri uri)
             
     -- change document notification
     -- we should re-parse and update everything!
     HandlerRequest (NotDidChangeTextDocument notification) -> do
-      let doc  = notification ^. J.params . J.textDocument -- . J.uri 
+      let doc  = notification ^. J.params . J.textDocument 
       updateDocumentLsp ide global lf doc
-      return ()
 
     ----------------------------------------------------------------------------
     -- hover request         
@@ -327,19 +356,14 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
       liftIO $ U.logs $ "hover request at " ++ show (posToSrcPos pos)   
-      mbHover <- liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
-        Nothing    -> return Nothing
-        Just table -> case Map.lookup uri table >>= ideResult of
-          Nothing     -> return Nothing
-          Just result -> do
-            let  mbMsg = ideOnHover ide result (posToSrcPos pos)
-            case mbMsg of
-              Nothing -> return Nothing
-              Just (loc,msgs) -> do
-                liftIO $ U.logs $ "ide says: " ++ show msgs   
-                let ms = J.HoverContents $ J.markedUpContent lspServerName (T.pack $ unlines msgs)
-                    ht = J.Hover ms (Just $ locToRange loc)
-                return $ Just ht
+      mbMsg   <- ideGetMaybe uri $ \res -> ideOnHover ide res (posToSrcPos pos)
+      mbHover <- case mbMsg of
+        Nothing -> return Nothing
+        Just (loc,msgs) -> do
+          liftIO $ U.logs $ "ide says: " ++ show msgs   
+          let ms = J.HoverContents $ J.markedUpContent lspServerName (T.pack $ unlines msgs)
+              ht = J.Hover ms (Just $ locToRange loc)
+          return $ Just ht
       reactorSend $ RspHover $ Core.makeResponseMessage req mbHover 
         
     ----------------------------------------------------------------------------
@@ -351,13 +375,8 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
       liftIO $ U.logs $ "highlight request at " ++ show (posToSrcPos pos)   
-      hlList <- liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
-        Nothing    -> return []
-        Just table -> case Map.lookup uri table >>= ideResult of
-          Nothing     -> return []
-          Just result -> do
-            let hlList1 = ideHighlight ide result (posToSrcPos pos)
-            return [ J.DocumentHighlight (locToRange loc) Nothing | loc <- hlList1 ]
+      hlList1 <- ideGetList uri $ \res -> ideHighlight ide res (posToSrcPos pos)
+      let hlList = [ J.DocumentHighlight (locToRange loc) Nothing | loc <- hlList1 ]
       reactorSend $ RspDocumentHighlights $ Core.makeResponseMessage req (J.List hlList) 
 
     ----------------------------------------------------------------------------
@@ -368,11 +387,7 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
       liftIO $ U.logs $ "definition request at " ++ show (posToSrcPos pos)   
-      mbloc <- liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
-        Nothing    -> return Nothing
-        Just table -> case Map.lookup uri table >>= ideResult of
-          Nothing     -> return Nothing
-          Just result -> return $ ideDefinLoc ide result (posToSrcPos pos)
+      mbloc <- ideGetMaybe uri $ \res -> ideDefinLoc ide res (posToSrcPos pos)
       reactorSend $ RspDefinition $ Core.makeResponseMessage req $ case mbloc of
         Just loc -> J.SingleLoc (J.Location doc (locToRange loc))
         Nothing  -> J.MultiLoc []    -- ?? how to return failure
@@ -385,11 +400,7 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
       liftIO $ U.logs $ "completion request at " ++ show (posToSrcPos pos)   
-      clist <- liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
-        Nothing    -> return []
-        Just table -> case Map.lookup uri table >>= ideResult of
-          Nothing     -> return []
-          Just result -> return $ ideCompletion ide result (posToSrcPos pos)
+      clist <- ideGetList uri $ \res -> ideCompletion ide res (posToSrcPos pos)
       -- liftIO $ U.logs $ "completion list = " ++ show (map fst clist)   
       let items = [ mkCompletionItem label mbkind | (label,mbkind) <- clist ]
       reactorSend $ RspCompletion $ Core.makeResponseMessage req 
@@ -403,12 +414,8 @@ reactor ide global lf inp = flip runReaderT lf $ forever $ do
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
       liftIO $ U.logs $ "rename request at " ++ show (posToSrcPos pos)   
-      list <- liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
-        Nothing    -> return []
-        Just table -> case Map.lookup uri table >>= ideResult of
-          Nothing     -> return []
-          Just result -> return $ ideRename ide result (posToSrcPos pos) (T.unpack newName)
-      liftIO $ U.logs $ "renaming = " ++ show list
+      list <- ideGetList uri $ \res -> ideRename ide res (posToSrcPos pos) (T.unpack newName)
+      -- liftIO $ U.logs $ "renaming = " ++ show list
       let edits = J.List [ J.TextEdit (locToRange loc) (T.pack newText) | (loc,newText) <- list ]
       let vtdoc = J.VersionedTextDocumentIdentifier doc (Just 0) -- Nothing  -- ???
       let docedit = J.TextDocumentEdit vtdoc edits   
