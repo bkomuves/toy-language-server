@@ -32,6 +32,8 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 
 import System.Exit
+import System.FilePath
+import System.Directory
 import System.IO.Unsafe as Unsafe
 
 import qualified Language.Haskell.LSP.Control     as CTRL
@@ -53,10 +55,15 @@ import Common
 lspServerName :: T.Text
 lspServerName = T.pack "toy-ide"
 
+logging :: Bool
 logging = True
 
-logFile        = "/tmp/toy-ide.log"
-sessionLogFile = "/tmp/toy-ide-session.log"
+{-# NOINLINE logDir #-}
+logDir :: FilePath
+logDir = Unsafe.unsafePerformIO getTemporaryDirectory 
+
+logFile        = logDir </> "toy-ide.log"
+sessionLogFile = logDir </> "toy-ide-session.log"
 
 --------------------------------------------------------------------------------
 -- * our simplified LSP abstraction layer
