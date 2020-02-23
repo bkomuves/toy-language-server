@@ -110,20 +110,20 @@ mapReplaceIfExists !k !v = Map.alter f k where
 -- why isn't this part of @haskell-lsp@?
 defCompletionItem :: J.CompletionItem
 defCompletionItem = J.CompletionItem
-  { J._label = T.empty               -- The label of this completion item. By default also the text that is inserted when selecting this completion.
-  , J._kind  = Nothing
-  , J._detail = Nothing              -- A human-readable string with additional information about this item, like type or symbol information.
-  , J._documentation = Nothing       -- A human-readable string that represents a doc-comment.
-  , J._deprecated = Nothing          -- Indicates if this item is deprecated.
-  , J._preselect = Nothing           -- Select this item when showing. *Note* that only one completion item can be selected and that the tool / client decides which item that is. The rule is that the *first* item of those that match best is selected.
-  , J._sortText = Nothing            -- A string that should be used when filtering a set of completion items. When falsy the label is used.
-  , J._filterText = Nothing            --  A string that should be used when filtering a set of completion items. When falsy the label is used.
-  , J._insertText = Nothing            --  A string that should be inserted a document when selecting this completion. When falsy the label is used.
-  , J._insertTextFormat = Nothing      --  The format of the insert text. The format applies to both the insertText property and the newText property of a provided textEdit.
-  , J._textEdit = Nothing              --  An edit which is applied to a document when selecting this completion. When an edit is provided the value of insertText is ignored.
-  , J._additionalTextEdits = Nothing   --  An optional array of additional text edits that are applied when selecting this completion. Edits must not overlap with the main edit nor with themselves.
-  , J._commitCharacters = Nothing      --  An optional set of characters that when pressed while this completion is active will accept it first and then type that character. *Note* that all commit characters should have `length=1` and that superfluous characters will be ignored.
-  , J._command = Nothing               --  An optional command that is executed *after* inserting this completion. *Note* that additional modifications to the current document should be described with the additionalTextEdits-property.
+  { J._label = T.empty                 -- The label of this completion item. By default also the text that is inserted when selecting this completion.
+  , J._kind  = Nothing                 -- Kind of the item (method, type, color, etc)
+  , J._detail = Nothing                -- A human-readable string with additional information about this item, like type or symbol information.
+  , J._documentation = Nothing         -- A human-readable string that represents a doc-comment.
+  , J._deprecated = Nothing            -- Indicates if this item is deprecated.
+  , J._preselect = Nothing             -- Select this item when showing. *Note* that only one completion item can be selected and that the tool / client decides which item that is. The rule is that the *first* item of those that match best is selected.
+  , J._sortText = Nothing              -- A string that should be used when filtering a set of completion items. When falsy the label is used.
+  , J._filterText = Nothing            -- A string that should be used when filtering a set of completion items. When falsy the label is used.
+  , J._insertText = Nothing            -- A string that should be inserted a document when selecting this completion. When falsy the label is used.
+  , J._insertTextFormat = Nothing      -- The format of the insert text. The format applies to both the insertText property and the newText property of a provided textEdit.
+  , J._textEdit = Nothing              -- An edit which is applied to a document when selecting this completion. When an edit is provided the value of insertText is ignored.
+  , J._additionalTextEdits = Nothing   -- An optional array of additional text edits that are applied when selecting this completion. Edits must not overlap with the main edit nor with themselves.
+  , J._commitCharacters = Nothing      -- An optional set of characters that when pressed while this completion is active will accept it first and then type that character. *Note* that all commit characters should have `length=1` and that superfluous characters will be ignored.
+  , J._command = Nothing               -- An optional command that is executed *after* inserting this completion. *Note* that additional modifications to the current document should be described with the additionalTextEdits-property.
   , J._xdata = Nothing 
   }
   

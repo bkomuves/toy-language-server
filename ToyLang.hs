@@ -99,9 +99,9 @@ completeColor c = filter (isPrefixOf $ map toLower c) knownColors
 -- * check the whole document
 
 data CheckResult = CheckResult
-  { chkMessages :: [Located Message]
-  , chkInfo     :: Map Location [Info]
-  , chkUsage    :: Map Location [Location]
+  { chkMessages :: [Located Message]         -- ^ error messages with location
+  , chkInfo     :: Map Location [Info]       -- ^ other information based on location
+  , chkUsage    :: Map Location [Location]   -- ^ where is the variable we bind here used?
   }
   deriving (Show,Generic,NFData)
   
@@ -145,8 +145,8 @@ data Info
   deriving (Show,Generic,NFData)
 
 data CheckState = CheckState 
-  { messages :: ![Located Message]
-  , info     :: !(Map Location [Info])
+  { messages :: ![Located Message]          -- ^ error messages with location
+  , info     :: !(Map Location [Info])      -- ^ other information based on location
   }
   deriving (Show,Generic,NFData)
 

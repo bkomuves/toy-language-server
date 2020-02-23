@@ -1,6 +1,6 @@
 
 -- | This module connects the language implementation with 
--- the [abstraction layer on the top of the] @haskell-lsp@ library
+-- the abstraction layer built on the top of the @haskell-lsp@ library
 
 module Main where
 
@@ -107,15 +107,16 @@ myCompletion (CheckResult messages nfos usage) pos =
 
 {-
 data CheckResult = CheckResult
-  { chkMessages :: [Located Message]
-  , chkInfo     :: Map Location [Info]
-  , chkUsage    :: Map Location [Location]
+  { chkMessages :: [Located Message]         -- ^ error messages with location
+  , chkInfo     :: Map Location [Info]       -- ^ other information based on location
+  , chkUsage    :: Map Location [Location]   -- ^ where is the variable we bind here used?
   }
     
 -- | Information collected during checking
 data Info
-  = DefinedAt !Location      -- ^ where was this variable defined
-  | HasType   !Type          -- ^ what type this expression has 
+  = DefinedAt !Location          -- ^ where was this variable defined
+  | HasType   !Type              -- ^ what type this expression has 
+  | NfoToken  !String            -- ^ the underlying text
   deriving Show
 
 data Message
