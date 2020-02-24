@@ -13,7 +13,7 @@ module.exports = {
     const clientOptions = {
       documentSelector: [{
         scheme:   'file',
-        language: 'plaintext',
+        language: 'toylang',
       }],
     }
     

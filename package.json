@@ -1,17 +1,26 @@
-{
-  "name": "toy-ide-vscode-ext",
-  "displayName": "toy-ide-vscode-ext",
-  "description": "Toy Haskell IDE example VS Code extension",
-  "version": "0.0.1",
-  "repository": "https://github.com/bkomuves/toy-language-server",
-  "engines": {
-    "vscode": "^1.40.0"
-  },
-  "activationEvents": [
-    "*"
-  ],
-  "main": "./extension.js",
-  "dependencies": {
-    "vscode-languageclient": "^6.1.1"
+
+{ "name":        "toy-ide-vscode-ext"
+, "displayName": "toy-ide-vscode-ext"
+, "description": "Toy Haskell IDE example VS Code extension"
+, "version":     "0.0.1"
+, "repository":  "https://github.com/bkomuves/toy-language-server"
+, "main":        "./extension.js"
+, "engines":          { "vscode": "^1.40.0" }
+, "categories":       [ "Programming Languages" ]
+, "activationEvents": [ "onLanguage:toylang" ]
+, "dependencies":     { "vscode-languageclient": "^6.1.1" }
+, "contributes": 
+  { "languages": 
+    [ { "id":         "toylang"
+      , "extensions": [".toy"]
+      , "aliases":    [ "ToyLang" , "toy-ide" ]
+      }
+    ]
+  , "grammars": 
+    [ { "language":  "toylang"
+      , "scopeName": "source.toy"
+      , "path":      "./grammar.json"
+      }
+    ]
   }
 }

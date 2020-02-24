@@ -12,7 +12,6 @@ but the LSP support aims to be somewhat realistic.
 IDE features
 ------------
 
-* ~~syntax highlighting~~ - apparently this is not supported by LSP... (what. the. actual. fuck) 
 * parsing, scope and type errors 
 * variable scope highlighting, shadowing info
 * scope-aware renaming
@@ -20,6 +19,14 @@ IDE features
 * completion (for colors)
 * jump to definition
 * ad-hoc diagnostic (warnings for large numbers and rainbow color)
+
+### Syntax highlighting
+
+Apparently, syntax highlighting is not supported by the Language Server Protocol... 
+which is quite a serious instance of What. The. Fuck. 
+
+Instead, we have rudimentary syntax highlighting (in VS Code only) via *TextMate grammars*, 
+which are an abomination on earth if I've seen one...
 
 The language
 ------------
@@ -76,8 +83,9 @@ $ npm i vscode-languageclient
 5. Install VS Code (if not already installed)
 6. Open the project directory in VS Code
 7. Press F5 to test the language server
-8. Open a new text file and paste the example program above. NB: Apparently you
-   have to first save the file for the extension to be activated!
+8. Open a new text file and paste the example program above. 
+   NB: You have to first save the file for the extension to be activated. 
+   And choose the file extension `.toy`, otherwise nothing will happen!
 9. Play around! For example, F2 does scope-aware renaming, and F12 is jump to definition.
 
 You should see something like this:

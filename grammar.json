@@ -1,0 +1,51 @@
+{ "scopeName": "source.toy"
+, "fileTypes": [ ".toy" ]
+, "patterns": 
+  [ { "include": "#comment"    }
+  , { "include": "#colon"      }
+  , { "include": "#eqdef"      }
+  , { "include": "#type"       }
+  , { "include": "#expression" } 
+  ]
+, "repository": 
+  { "expression": 
+    { "patterns": 
+      [ { "include": "#type" }
+      , { "include": "#number" }
+      , { "include": "#plus"   }
+      , { "include": "#boolean" }
+      , { "include": "#color"   }
+      , { "include": "#paren-expression" }
+      , { "include": "#variable" }
+      ]
+    }
+  , "type": 
+    { "patterns": 
+      [ { "include": "#arrow" }
+      , { "include": "#basetype" } 
+      ]
+    }
+  , "colon":    { "match": "[:]"         , "name": "keyword.other"    }
+  , "eqdef":    { "match": "[=]"         , "name": "keyword.other"    } 
+  , "color":    { "match": "#[a-zA-Z]*"  , "name": "constant.other"   }
+  , "number":   { "match": "\\b([0-9]+)" , "name": "constant.numeric" }
+  , "arrow":    { "match": "->"          , "name": "keyword.operator" }
+  , "plus":     { "match": "[+]"         , "name": "keyword.operator" }
+  , "variable": { "match": "\\b([a-zA-Z_][a-zA-Z_'-]*)" , "name":  "variable"          }
+  , "basetype": { "match": "\\b((Nat)|(Bool)|(Color))"  , "name":  "storage.type"      }
+  , "boolean":  { "match": "\\b((True)|(False))"        , "name":  "constant.language" }
+  , "comment": 
+    { "name":  "comment.line.double-dash"
+    , "begin": "--"
+    , "end":   "\n"
+    }
+  , "paren-expression": 
+    { "begin": "\\("
+    , "end":   "\\)"
+    , "beginCaptures": { "0": { "name": "punctuation.paren.open"  } }
+    , "endCaptures":   { "0": { "name": "punctuation.paren.close" } }
+    , "name": "expression.group"
+    , "patterns": [ { "include": "#expression" } ]
+    }
+  }
+}
