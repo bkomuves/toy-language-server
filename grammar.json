@@ -27,7 +27,7 @@
     }
   , "colon":    { "match": "[:]"         , "name": "keyword.other"    }
   , "eqdef":    { "match": "[=]"         , "name": "keyword.other"    } 
-  , "color":    { "match": "#[a-zA-Z]*"  , "name": "constant.other"   }
+  , "color":    { "match": "#[a-zA-Z-]*" , "name": "constant.other"   }
   , "number":   { "match": "\\b([0-9]+)" , "name": "constant.numeric" }
   , "arrow":    { "match": "->"          , "name": "keyword.operator" }
   , "plus":     { "match": "[+]"         , "name": "keyword.operator" }
