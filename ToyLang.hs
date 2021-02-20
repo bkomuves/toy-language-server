@@ -96,6 +96,42 @@ completeColor :: String -> [String]
 completeColor c = filter (isPrefixOf $ map toLower c) knownColors
 
 --------------------------------------------------------------------------------
+-- * greek letters
+
+knownGreekLetters :: [(String,String)]
+knownGreekLetters =
+  [ ( "alpha"   , "α" ) 
+  , ( "beta"    , "β" ) 
+  , ( "gamma"   , "γ" ) 
+  , ( "delta"   , "δ" ) 
+  , ( "epsilon" , "ε" ) 
+  , ( "zeta"    , "ζ" ) 
+  , ( "eta"     , "η" ) 
+  , ( "theta"   , "θ" ) 
+  , ( "iota"    , "ι" ) 
+  , ( "kappa"   , "κ" ) 
+  , ( "lambda"  , "λ" ) 
+  , ( "mu"      , "μ" ) 
+  , ( "nu"      , "ν" ) 
+  , ( "xi"      , "ξ" ) 
+--  , ( "omicron" , "ο" ) 
+  , ( "pi"      , "π" ) 
+  , ( "rho"     , "ρ" ) 
+  , ( "sigma"   , "σ" ) 
+  , ( "tau"     , "τ" ) 
+--  , ( "upsilon  , "υ" ) 
+  , ( "phi"     , "φ" ) 
+  , ( "chi"     , "χ" ) 
+  , ( "psi"     , "ψ" ) 
+  , ( "omega"   , "ω" ) 
+  ]
+
+completeGreek :: String -> Either [String] String
+completeGreek str = case filter (\pair -> isPrefixOf str (fst pair)) knownGreekLetters of
+  [(name,letter)]  -> Right letter      
+  pairs            -> Left  (map fst pairs)
+
+--------------------------------------------------------------------------------
 -- * check the whole document
 
 data CheckResult = CheckResult
@@ -225,7 +261,7 @@ checkExpr = go where
         ColorLit col -> do
           addInfo loc (NfoToken ('#':col))
           unless (elem col knownColors) $ addMessage loc (NotAColor col) 
-          when   (col == "rainbow")     $ addMessage loc (Warning "rainbow is not really a color!")
+          when   (col == "rainbow")     $ addMessage loc (Warning "xxx rainbow is not really a color!")
         _ -> nop
       return (Just $ literalType lit)
 

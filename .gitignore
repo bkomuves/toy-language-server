@@ -3,3 +3,4 @@ package-lock.json
 *.hi
 *.o
 dist
+tmp

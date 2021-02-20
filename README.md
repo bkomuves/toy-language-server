@@ -3,8 +3,8 @@ Minimalistic language server (LSP) implementation
 =================================================
 
 Language server protocol example for a toy language implemented in Haskell,
-using the [haskell-lsp](https://hackage.haskell.org/package/haskell-lsp) 
-library under the hood.
+using the [lsp](https://hackage.haskell.org/package/lsp) Haskell library 
+under the hood.
 
 The "language" itself is very minimal to keep the implementation simple, 
 but the LSP support aims to be somewhat realistic.
@@ -22,8 +22,10 @@ IDE features
 
 ### Syntax highlighting
 
-Apparently, syntax highlighting is not supported by the Language Server Protocol... 
-which is quite a serious instance of What. The. Fuck. 
+Syntax highlighting was not supported by the Language Server Protocol when
+this was originally written... which is quite a serious instance of What. The. Fuck. 
+Apparently semantic highlighting finally comes with 3.16, but `lsp` does not
+support that yet.
 
 Instead, we have rudimentary syntax highlighting (in VS Code only) via *TextMate grammars*, 
 which are an abomination on earth if I've seen one...
@@ -66,9 +68,9 @@ nice_col   : Color = #rainbow
 Installation instructions (for VS Code)
 --------------------------------------
 
-1. Install `haskell-lsp` and `megaparsec`:
+1. Install `lsp` and `megaparsec`:
 ```
-$ cabal install haskell-lsp
+$ cabal install lsp
 $ cabal install megaparsec
 ```
 2. Build the server executable:

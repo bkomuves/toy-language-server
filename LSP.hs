@@ -4,10 +4,12 @@
 --
 -- (loosely based on the example server code in @haskell-lsp@)
 
-{-# LANGUAGE BangPatterns, ScopedTypeVariables #-}
+{-# LANGUAGE BangPatterns, ScopedTypeVariables, KindSignatures #-}
 {-# LANGUAGE FlexibleContexts, FlexibleInstances #-}
 {-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE RankNTypes, GADTs, TypeInType #-}
+{-# LANGUAGE TypeOperators, ExplicitNamespaces #-}
 module LSP where
 
 --------------------------------------------------------------------------------
@@ -18,7 +20,7 @@ import Control.Monad.STM
 import Control.Concurrent
 import Control.Concurrent.MVar
 import Control.Concurrent.STM.TChan
-import Control.Exception as E
+import qualified Control.Exception as E 
 import Control.Lens
 
 import GHC.Generics (Generic)
@@ -36,15 +38,15 @@ import System.FilePath
 import System.Directory
 import System.IO.Unsafe as Unsafe
 
-import qualified Language.Haskell.LSP.Control     as CTRL
-import qualified Language.Haskell.LSP.Core        as Core
-import           Language.Haskell.LSP.Diagnostics
-import           Language.Haskell.LSP.Messages
-import qualified Language.Haskell.LSP.Types       as J
-import qualified Language.Haskell.LSP.Types.Lens  as J
-import           Language.Haskell.LSP.VFS
-import qualified Language.Haskell.LSP.Utility     as U
-import qualified System.Log.Logger                as L
+import qualified Data.Aeson               as J
+import           Language.LSP.Server      as S
+import           Language.LSP.Diagnostics
+import qualified Language.LSP.Types       as J
+import qualified Language.LSP.Types.Lens  as J
+import           Language.LSP.VFS
+import           System.Log.Logger        as L
+
+import           Language.LSP.Types ( type (|?)(..) )
 
 import Common
 
@@ -67,13 +69,19 @@ sessionLogFile = logDir </> "toy-ide-session.log"
 --------------------------------------------------------------------------------
 -- * our simplified LSP abstraction layer
 
+data IDECompletion = IDECompletion
+  { ideComplLabel   :: String 
+  , ideComplReplace :: Maybe String
+  , ideComplKind    :: Maybe J.CompletionItemKind
+  }
+
 data IDE result = IDE
   { ideCheckDocument :: T.Text -> result
   , ideDiagnostics   :: result -> [Diag]
   , ideOnHover       :: result -> SrcPos -> Maybe (Location,[String])
   , ideHighlight     :: result -> SrcPos -> [Location]
   , ideDefinLoc      :: result -> SrcPos -> Maybe Location
-  , ideCompletion    :: result -> SrcPos -> [(String, Maybe J.CompletionItemKind)]
+  , ideCompletion    :: result -> SrcPos -> [IDECompletion]
   , ideRename        :: result -> SrcPos -> String -> [(Location,String)]
   }
 
@@ -118,6 +126,7 @@ defCompletionItem :: J.CompletionItem
 defCompletionItem = J.CompletionItem
   { J._label = T.empty                 -- The label of this completion item. By default also the text that is inserted when selecting this completion.
   , J._kind  = Nothing                 -- Kind of the item (method, type, color, etc)
+  , J._tags  = Nothing                 -- Tags for this completion item.
   , J._detail = Nothing                -- A human-readable string with additional information about this item, like type or symbol information.
   , J._documentation = Nothing         -- A human-readable string that represents a doc-comment.
   , J._deprecated = Nothing            -- Indicates if this item is deprecated.
@@ -133,11 +142,17 @@ defCompletionItem = J.CompletionItem
   , J._xdata = Nothing 
   }
   
-mkCompletionItem :: String -> Maybe J.CompletionItemKind -> J.CompletionItem
-mkCompletionItem s mbkind = defCompletionItem
-  { J._label = T.pack s   
-  , J._kind  = mbkind
-  }
+mkCompletionItem :: IDECompletion -> J.CompletionItem
+mkCompletionItem (IDECompletion label mbreplace mbkind) = case mbreplace of
+  Nothing -> defCompletionItem
+    { J._label = T.pack label   
+    , J._kind  = mbkind
+    }
+  Just replace -> defCompletionItem
+    { J._label      = T.pack label   
+    , J._kind       = mbkind
+    , J._insertText = Just (T.pack replace)
+    }
 
 --------------------------------------------------------------------------------
 -- * re-check documents
@@ -150,40 +165,40 @@ instance SomeVersion Int         where versionToMaybeInt = Just
 checkDocument 
   :: (NFData result, SomeVersion ver, J.HasUri textdoc J.Uri, J.HasVersion textdoc ver)
   => IDE result -> MVar (IDETable result) 
-  -> textdoc -> Maybe FilePath -> T.Text -> R () ()
+  -> textdoc -> Maybe FilePath -> T.Text -> LspM Config ()
 checkDocument ide global tdoc mbFilePath text = do
   let uri = tdoc ^. J.uri . to J.toNormalizedUri
       ver = tdoc ^. J.version
-  liftIO $ U.logs "checking document..."
+  liftIO $ debugM "checkDocument" $ "checking document..."
   let !result = ideCheckDocument ide text
   -- liftIO $ print result
   rnf result `seq` (liftIO $ adjustMVar global (mapReplaceIfExists uri (IdeChecked result)))
-  liftIO $ U.logs "computing diagnostics..."
+  liftIO $ debugM "checkDocument" $ "computing diagnostics..."
   let !diags = ideDiagnostics ide result
   sendDiags uri (versionToMaybeInt ver) diags    -- version ???
   rnf diags `seq` (liftIO $ adjustMVar global (mapReplaceIfExists uri (IdeDone result)))
-  liftIO $ U.logs "done."
+  liftIO $ debugM "checkDocument" $ "done."
   return ()
    
 updateDocument 
   :: (NFData result, SomeVersion ver, J.HasUri textdoc J.Uri, J.HasVersion textdoc ver)
   => IDE result -> MVar (IDETable result) 
-  -> textdoc -> Maybe FilePath -> T.Text -> R () ()
+  -> textdoc -> Maybe FilePath -> T.Text -> LspM Config ()
 updateDocument ide global tdoc mbFileName text = do
   let uri = tdoc ^. J.uri . to J.toNormalizedUri
-  lf <- ask
-  liftIO $ U.logs "updating document..."
+  lspEnv <- getLspEnv  -- :: LanguageContextEnv config
+  liftIO $ debugM "updateDocument" $ "updating document..."
   liftIO $ do
     table <- takeMVar global
     case Map.lookup uri table of
       Just (IdeChecking old_threadid) -> killThread old_threadid
       _ -> return () 
-    threadid <- forkIO $ flip runReaderT lf $ checkDocument ide global tdoc mbFileName text
+    threadid <- forkIO $ runLspT lspEnv $ checkDocument ide global tdoc mbFileName text
     putMVar global $! (Map.insert uri (IdeChecking threadid) table)
 
 closeDocument 
   :: NFData result => IDE result -> MVar (IDETable result) 
-  -> J.NormalizedUri  -> R () ()
+  -> J.NormalizedUri -> LspM Config ()
 closeDocument ide global uri = do
   liftIO $ adjustMVar global (Map.delete uri)
   
@@ -196,52 +211,44 @@ lspMain ide = do
   run ide global >>= \r -> case r of
     0 -> exitSuccess
     c -> exitWith . ExitFailure $ c
-   
-run  :: NFData result => IDE result -> MVar (IDETable result) -> IO Int
-run ide global = flip E.catches handlers $ do    
-  rin <- atomically newTChan :: IO (TChan ReactorInput)
-  let dispatcher lf = forkIO (reactor ide global lf rin) >> return Nothing
-  let iniCallbacks = Core.InitializeCallbacks
-        { Core.onInitialConfiguration = \_ -> Right ()
-        , Core.onConfigurationChange  = \_ -> Right ()
-        , Core.onStartup = dispatcher
+
+run :: forall result. NFData result => IDE result -> MVar (IDETable result) -> IO Int
+run ide global = flip E.catches handlers $ do
+  rin  <- atomically newTChan :: IO (TChan ReactorInput)
+  let serverDefinition = ServerDefinition
+        { onConfigurationChange = \v -> case J.fromJSON v of
+            J.Error   e -> pure $ Left (T.pack e)
+            J.Success cfg -> do
+              -- sendNotification J.SWindowShowMessage $
+              --  J.ShowMessageParams J.MtInfo $ "Wibble factor set to " <> T.pack (show (wibbleFactor cfg))
+              pure $ Right cfg
+        , doInitialize = \env _ -> forkIO (reactor rin) >> pure (Right env)
+        , staticHandlers = lspHandlers ide global rin
+        , interpretHandler = \env -> S.Iso (runLspT env) liftIO
+        , options = lspOptions
         }
+
   flip E.finally finalProc $ do
-    when logging $ Core.setupLogger (Just logFile) [] L.DEBUG
-    let session_log = if logging then Just sessionLogFile else Nothing
-    CTRL.run iniCallbacks (lspHandlers rin) lspOptions session_log    
+    setupLogger Nothing ["reactor"] DEBUG
+    runServer serverDefinition
+
   where
     handlers = [ E.Handler ioExcept
                , E.Handler someExcept
                ]
-    finalProc = return () -- L.removeAllHandlers
-    ioExcept   (e :: E.IOException  ) = print e >> return 1
-    someExcept (e :: E.SomeException) = print e >> return 1      
+    finalProc = removeAllHandlers
+    ioExcept   (e :: E.IOException)       = print e >> return 1
+    someExcept (e :: E.SomeException)     = print e >> return 1
 
 --------------------------------------------------------------------------------
+
+-- | Server configuration
+data Config 
+  = Config 
+  deriving (Generic, J.ToJSON, J.FromJSON)
     
-data ReactorInput  
-  = HandlerRequest FromClientMessage    
-  deriving Show
-  
-type R c a = ReaderT (Core.LspFuncs c) IO a  
-
---------------------------------------------------------------------------------
-
-reactorSend :: FromServerMessage -> R () ()
-reactorSend msg = do
-  lf <- ask
-  liftIO $ Core.sendFunc lf msg
-
-publishDiagnostics :: Int -> J.NormalizedUri -> J.TextDocumentVersion -> DiagnosticsBySource -> R () ()
-publishDiagnostics maxToPublish uri v diags = do
-  lf <- ask
-  liftIO $ (Core.publishDiagnosticsFunc lf) maxToPublish uri v diags
-
-nextLspReqId :: R () J.LspId
-nextLspReqId = do
-  f <- asks Core.getNextReqId
-  liftIO f
+newtype ReactorInput
+  = ReactorAction (IO ())
   
 --------------------------------------------------------------------------------
 -- * conversion between LSP's and our positions
@@ -262,7 +269,7 @@ rangeToLoc (J.Range p1 p2) = Location (posToSrcPos p1) (posToSrcPos p2)
 --------------------------------------------------------------------------------
 
 -- | send back diagnostics
-sendDiags :: J.NormalizedUri -> Maybe Int -> [Diag] -> R () ()
+sendDiags :: J.NormalizedUri -> Maybe Int -> [Diag] -> LspM Config ()
 sendDiags fileUri version mydiags = do
   let diags = 
         [ J.Diagnostic 
@@ -277,165 +284,198 @@ sendDiags fileUri version mydiags = do
         | Diag loc severity msg <- mydiags
         ]
   publishDiagnostics 100 fileUri version (partitionBySource diags)
+
+--------------------------------------------------------------------------------
   
 -- we call this when the document is first loaded or when it changes
 updateDocumentLsp 
   :: (NFData result, SomeVersion ver, J.HasVersion textdoc ver, J.HasUri textdoc J.Uri) 
-  => IDE result -> MVar (IDETable result)
-  -> Core.LspFuncs c -> textdoc -> R () ()
-updateDocumentLsp ide global lf doc0 = do
+  => IDE result -> MVar (IDETable result) -> textdoc -> LspM Config ()
+updateDocumentLsp ide global doc0 = do
   let doc      = J.toNormalizedUri (doc0 ^. J.uri)
       fileName = J.uriToFilePath   (doc0 ^. J.uri)
-  -- liftIO $ U.logs $ "updating document " ++ show fileName
-  mdoc <- liftIO $ Core.getVirtualFileFunc lf doc
+  -- liftIO $ debugM "updateDocumentLsp" $ "updating document " ++ show fileName
+  mdoc <- getVirtualFile doc
   case mdoc of
     Just (VirtualFile lsp_ver file_ver str) -> do
       updateDocument ide global doc0 fileName (Rope.toText str)
     Nothing -> do
-      liftIO $ U.logs $ "updateDocumentLsp: vfs returned Nothing"
+      liftIO $ debugM "updateDocumentLsp" $ "updateDocumentLsp: vfs returned Nothing"
       
 --------------------------------------------------------------------------------
 -- * the main event handler
 
-reactor 
-  :: forall result. NFData result 
-  => IDE result -> MVar (IDETable result) 
-  -> Core.LspFuncs () -> TChan ReactorInput -> IO ()
-reactor ide global lf inp = flip runReaderT lf $ forever $ do
+-- | The single point that all events flow through, allowing management of state
+-- to stitch replies and requests together from the two asynchronous sides: lsp
+-- server and backend compiler
+reactor :: TChan ReactorInput -> IO ()
+reactor inp = do
+  debugM "reactor" "Started the reactor"
+  forever $ do
+    ReactorAction act <- atomically $ readTChan inp
+    act
 
-  -- common access patterns
-  let ideGetMaybe :: J.NormalizedUri -> (result -> Maybe a) -> R () (Maybe a)
-      ideGetMaybe uri user = liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
-        Nothing    -> return Nothing
-        Just table -> case Map.lookup uri table >>= ideResult of
-          Nothing     -> return Nothing
-          Just result -> return (user result)
+-- | Check if we have a handler, and if we create a haskell-lsp handler to pass it as
+-- input into the reactor
+lspHandlers 
+  :: forall result. NFData result => IDE result -> MVar (IDETable result)
+  -> TChan ReactorInput -> Handlers (LspM Config)
+lspHandlers ide global rin = mapHandlers goReq goNot (handle ide global) where
 
-  let ideGetList :: J.NormalizedUri -> (result -> [a]) -> R () [a]
-      ideGetList uri user = liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
-        Nothing    -> return []
-        Just table -> case Map.lookup uri table >>= ideResult of
-          Nothing     -> return []
-          Just result -> return (user result)
+  goReq :: forall (a :: J.Method J.FromClient J.Request). Handler (LspM Config) a -> Handler (LspM Config) a
+  goReq f = \msg k -> do
+    env <- getLspEnv
+    liftIO $ atomically $ writeTChan rin $ ReactorAction (runLspT env $ f msg k)
 
-  inval <- liftIO $ atomically $ readTChan inp
-  case inval of
-  
-    -- response from client   
-    HandlerRequest (RspFromClient rm) -> do
-      liftIO $ U.logs $ "got RspFromClient:" ++ show rm
-      return ()
+  goNot :: forall (a :: J.Method J.FromClient J.Notification). Handler (LspM Config) a -> Handler (LspM Config) a
+  goNot f = \msg -> do
+    env <- getLspEnv
+    liftIO $ atomically $ writeTChan rin $ ReactorAction (runLspT env $ f msg)
+
+--------------------------------------------------------------------------------
+-- * The actual event handling logic
+
+-- | Where the actual logic resides for handling requests and notifications.
+handle :: forall result. NFData result => IDE result -> MVar (IDETable result) -> Handlers (LspM Config)
+handle ide global = mconcat
       
-    -- initialized notification   
-    HandlerRequest (NotInitialized _notification) -> do
-      liftIO $ U.logs $ "Initialized Notification"
+  -- See 
+  -- <https://hackage.haskell.org/package/lsp-types-1.1.0.0/docs/Language-LSP-Types.html#t:MessageParams>
+  -- for request parameter types, and
+  -- <https://hackage.haskell.org/package/lsp-types-1.1.0.0/docs/Language-LSP-Types.html#t:ResponseResult>
+  -- for the response types
+
+  [ -- initialized notification   
+    notificationHandler J.SInitialized $ \_notification -> do
+      liftIO $ debugM "reactor.handle" $ "Initialized Notification"
       -- we could register extra capabilities here, but we are not doing that.
       return ()
 
     ----------------------------------------------------------------------------
 
     -- open document notification
-    HandlerRequest (NotDidOpenTextDocument notification) -> do
+  , notificationHandler J.STextDocumentDidOpen $ \notification -> do
       let doc = notification ^. J.params . J.textDocument 
-      updateDocumentLsp ide global lf doc
+      updateDocumentLsp ide global doc
 
     -- save document notification
-    HandlerRequest (NotDidSaveTextDocument notification) -> do
+  , notificationHandler J.STextDocumentDidSave $ \notification -> do
       -- let doc = notification ^. J.params . J.textDocument 
       return ()
 
     -- close document notification
-    HandlerRequest (NotDidCloseTextDocument notification) -> do
+  , notificationHandler J.STextDocumentDidClose $ \notification -> do
       let uri = notification ^. J.params . J.textDocument . J.uri
       closeDocument ide global (J.toNormalizedUri uri)
             
     -- change document notification
     -- we should re-parse and update everything!
-    HandlerRequest (NotDidChangeTextDocument notification) -> do
+  , notificationHandler J.STextDocumentDidChange $ \notification -> do
       let doc  = notification ^. J.params . J.textDocument 
-      updateDocumentLsp ide global lf doc
+      updateDocumentLsp ide global doc
 
     ----------------------------------------------------------------------------
     -- hover request         
     -- we should send back some tooltip info 
 
-    HandlerRequest (ReqHover req) -> do
-      let J.TextDocumentPositionParams tdoc pos _workdone = req ^. J.params
+    -- MessageParams TextDocumentHover = HoverParams
+  , requestHandler J.STextDocumentHover $ \req responder -> do
+      let J.HoverParams tdoc pos _workdone = req ^. J.params
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
-      liftIO $ U.logs $ "hover request at " ++ show (posToSrcPos pos)   
+      liftIO $ debugM "reactor.handle" $ "hover request at " ++ show (posToSrcPos pos)   
       mbMsg   <- ideGetMaybe uri $ \res -> ideOnHover ide res (posToSrcPos pos)
       mbHover <- case mbMsg of
         Nothing -> return Nothing
         Just (loc,msgs) -> do
-          liftIO $ U.logs $ "ide says: " ++ show msgs   
-          let ms = J.HoverContents $ J.markedUpContent lspServerName (T.pack $ unlines msgs)
-              ht = J.Hover ms (Just $ locToRange loc)
-          return $ Just ht
-      reactorSend $ RspHover $ Core.makeResponseMessage req mbHover 
-        
+          liftIO $  debugM "reactor.handle" $ "ide says: " ++ show msgs   
+          let hc  = J.HoverContents $ J.markedUpContent lspServerName (T.pack $ unlines msgs)
+              hov = J.Hover hc (Just $ locToRange loc) :: J.Hover
+          return $ Just hov
+      responder (Right mbHover)
+      -- . ^^^ ResponseResult TextDocumentHover = Maybe Hover
+      -- 
     ----------------------------------------------------------------------------
     -- highlight request
     -- we should send back a list of ranges
     
-    HandlerRequest (ReqDocumentHighlights req) -> do
-      let J.TextDocumentPositionParams tdoc pos _workdone = req ^. J.params
+  , requestHandler J.STextDocumentDocumentHighlight $ \req responder -> do
+      let J.DocumentHighlightParams tdoc pos _workdone _partialres = req ^. J.params
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
-      liftIO $ U.logs $ "highlight request at " ++ show (posToSrcPos pos)   
+      liftIO $ debugM "reactor.handle" $ "highlight request at " ++ show (posToSrcPos pos)   
       hlList1 <- ideGetList uri $ \res -> ideHighlight ide res (posToSrcPos pos)
       let hlList = [ J.DocumentHighlight (locToRange loc) Nothing | loc <- hlList1 ]
-      reactorSend $ RspDocumentHighlights $ Core.makeResponseMessage req (J.List hlList) 
+      responder (Right $ J.List hlList) 
 
     ----------------------------------------------------------------------------
     -- (jump to) definition request
 
-    HandlerRequest (ReqDefinition req) -> do
-      let J.TextDocumentPositionParams tdoc pos _workdone = req ^. J.params
+  , requestHandler J.STextDocumentDefinition $ \req responder -> do
+      let J.DefinitionParams tdoc pos _workdone _partialres = req ^. J.params
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
-      liftIO $ U.logs $ "definition request at " ++ show (posToSrcPos pos)   
+      liftIO $ debugM "reactor.handle" $ "definition request at " ++ show (posToSrcPos pos)   
       mbloc <- ideGetMaybe uri $ \res -> ideDefinLoc ide res (posToSrcPos pos)
-      reactorSend $ RspDefinition $ Core.makeResponseMessage req $ case mbloc of
-        Just loc -> J.SingleLoc (J.Location doc (locToRange loc))
-        Nothing  -> J.MultiLoc []    -- ?? how to return failure
+      let rsp :: J.Location |? (J.List J.Location |? J.List J.LocationLink)
+          rsp = case mbloc of
+            Just loc -> J.InL (J.Location doc (locToRange loc))
+            Nothing  -> J.InR (J.InL $ J.List [])       -- ?? how to return failure - apparently this way
+      responder (Right rsp)
+    -- . ^^^ ResponseResult TextDocumentDefinition = Location |? (List Location |? List LocationLink)
 
     ----------------------------------------------------------------------------
     -- completion request
 
-    HandlerRequest (ReqCompletion req) -> do
-      let J.CompletionParams tdoc pos _ctx _workdone = req ^. J.params
+  , requestHandler J.STextDocumentCompletion $ \req responder -> do
+      let J.CompletionParams tdoc pos _workdone _partialrestok _ctx  = req ^. J.params
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
-      liftIO $ U.logs $ "completion request at " ++ show (posToSrcPos pos)   
+      liftIO $ debugM "reactor.handle" $ "completion request at " ++ show (posToSrcPos pos)   
       clist <- ideGetList uri $ \res -> ideCompletion ide res (posToSrcPos pos)
-      -- liftIO $ U.logs $ "completion list = " ++ show (map fst clist)   
-      let items = [ mkCompletionItem label mbkind | (label,mbkind) <- clist ]
-      reactorSend $ RspCompletion $ Core.makeResponseMessage req 
-        $ J.CompletionList $ J.CompletionListType False (J.List items)
+      -- liftIO $ debugM "reactor.handle" $ "completion list = " ++ show (map fst clist)   
+      let items = map mkCompletionItem clist
+      let rsp = J.InR (J.CompletionList False (J.List items))
+      responder (Right rsp)
+      -- . ^^^ ResponseResult TextDocumentCompletion = List CompletionItem |? CompletionList
 
     ----------------------------------------------------------------------------
     -- rename request
 
-    HandlerRequest (ReqRename req) -> do
-      let J.RenameParams tdoc pos newName _workdone = req ^. J.params
+  , requestHandler J.STextDocumentRename $ \req responder -> do
+      let J.RenameParams tdoc pos _workdone newName = req ^. J.params
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
-      liftIO $ U.logs $ "rename request at " ++ show (posToSrcPos pos)   
+      liftIO $ debugM "reactor.handle" $ "rename request at " ++ show (posToSrcPos pos)   
       list <- ideGetList uri $ \res -> ideRename ide res (posToSrcPos pos) (T.unpack newName)
-      -- liftIO $ U.logs $ "renaming = " ++ show list
+      -- liftIO $ debugM "reactor.handle" $ "renaming = " ++ show list
       let edits = J.List [ J.TextEdit (locToRange loc) (T.pack newText) | (loc,newText) <- list ]
       let vtdoc = J.VersionedTextDocumentIdentifier doc (Just 0) -- Nothing  -- ???
-      let docedit = J.TextDocumentEdit vtdoc edits   
-      reactorSend $ RspRename $ Core.makeResponseMessage req 
-        $ J.WorkspaceEdit Nothing $ Just (J.List [docedit])
-        
-    ----------------------------------------------------------------------------
+      let docedit = J.InL (J.TextDocumentEdit vtdoc edits) :: J.DocumentChange
+      let rsp = J.WorkspaceEdit Nothing $ Just (J.List [docedit])
+      responder (Right rsp)  
+      -- . ^^^ ResponseResult TextDocumentRename = WorkspaceEdit
 
-    -- something unhandled above
-    HandlerRequest om -> do
-      liftIO $ U.logs $ "got HandlerRequest:" ++ show om
-      return ()
+
+  ]
+
+  where
+
+    -- common access patterns
+    ideGetMaybe :: J.NormalizedUri -> (result -> Maybe a) -> LspM config (Maybe a)
+    ideGetMaybe uri user = liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
+      Nothing    -> return Nothing
+      Just table -> case Map.lookup uri table >>= ideResult of
+        Nothing     -> return Nothing
+        Just result -> return (user result)
+
+    ideGetList :: J.NormalizedUri -> (result -> [a]) -> LspM config [a]
+    ideGetList uri user = liftIO (tryReadMVar global) >>= \mbtable -> case mbtable of
+      Nothing    -> return []
+      Just table -> case Map.lookup uri table >>= ideResult of
+        Nothing     -> return []
+        Just result -> return (user result)
+
 
 --------------------------------------------------------------------------------
       
@@ -445,46 +485,15 @@ syncOptions = J.TextDocumentSyncOptions
   , J._change            = Just J.TdSyncIncremental
   , J._willSave          = Just False
   , J._willSaveWaitUntil = Just False
-  , J._save              = Just $ J.SaveOptions $ Just False
+  , J._save              = Just (J.InL False) 
   }
 
-lspOptions :: Core.Options
+lspOptions :: Options
 lspOptions = def 
-  { Core.textDocumentSync = Just syncOptions
---  , Core.executeCommandProvider = Just (J.ExecuteCommandOptions (J.List ["lsp-hello-command"]))
+  { textDocumentSync = Just syncOptions
+--  , executeCommandCommands = Just ["lsp-hello-command"]
   }
 
-lspHandlers :: TChan ReactorInput -> Core.Handlers
-lspHandlers rin = def 
-  { Core.initializedHandler                       = Just $ passHandler rin NotInitialized
-  , Core.responseHandler                          = Just $ responseHandlerCb rin
-  , Core.cancelNotificationHandler                = Just $ passHandler rin NotCancelRequestFromClient
-    --------------------------------------------
-  , Core.didOpenTextDocumentNotificationHandler   = Just $ passHandler rin NotDidOpenTextDocument
-  , Core.didSaveTextDocumentNotificationHandler   = Just $ passHandler rin NotDidSaveTextDocument
-  , Core.didChangeTextDocumentNotificationHandler = Just $ passHandler rin NotDidChangeTextDocument
-  , Core.didCloseTextDocumentNotificationHandler  = Just $ passHandler rin NotDidCloseTextDocument
-    ---------------------------------------------
-  , Core.hoverHandler                             = Just $ passHandler rin ReqHover
-  , Core.documentHighlightHandler                 = Just $ passHandler rin ReqDocumentHighlights
-  , Core.definitionHandler                        = Just $ passHandler rin ReqDefinition
-  , Core.completionHandler                        = Just $ passHandler rin ReqCompletion
-  , Core.renameHandler                            = Just $ passHandler rin ReqRename
---  , Core.codeActionHandler                        = Just $ passHandler rin ReqCodeAction
---  , Core.executeCommandHandler                    = Just $ passHandler rin ReqExecuteCommand
-  }
-      
---------------------------------------------------------------------------------
-
-passHandler :: TChan ReactorInput -> (a -> FromClientMessage) -> Core.Handler a
-passHandler rin c notification = do
-  atomically $ writeTChan rin (HandlerRequest (c notification))
-
-responseHandlerCb :: TChan ReactorInput -> Core.Handler J.BareResponseMessage
-responseHandlerCb _rin resp = do
-  U.logs $ "got ResponseMessage, ignoring: " ++ show resp      
-  return ()
- 
 --------------------------------------------------------------------------------
 
   

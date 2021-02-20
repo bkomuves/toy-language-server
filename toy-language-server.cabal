@@ -1,6 +1,6 @@
 Cabal-Version:       2.4
 Name:                toy-language-server
-Version:             0.1
+Version:             0.1.1
 Synopsis:            Language server (LSP) implementation for toy language
 Description:         Language server (LSP) implementation for toy language
 License:             BSD-3-Clause
@@ -25,10 +25,11 @@ executable ToyLang-IDE.exe
                        containers >= 0.5 , 
                        text >= 1.0 , bytestring >= 0.9.1 ,
                        filepath , directory , 
-                       megaparsec , deepseq , data-default , 
+                       deepseq , data-default , 
                        lens ,
+                       megaparsec , aeson , 
                        hslogger , rope-utf16-splay , 
-                       haskell-lsp-types >= 0.24 , haskell-lsp >= 0.24
+                       lsp-types >= 1.1.0 , lsp >= 1.1.1
 
   main-is:             IDE.hs
 

@@ -11,7 +11,7 @@ import Data.Maybe
 import qualified Data.Map.Strict as Map
 import qualified Data.Text as T
 
-import Language.Haskell.LSP.Types ( DiagnosticSeverity(..) , CompletionItemKind(..) )
+import Language.LSP.Types ( DiagnosticSeverity(..) , CompletionItemKind(..) )
 
 import Common
 import ToyLang
@@ -92,16 +92,42 @@ myDefinLoc (CheckResult messages nfos usage) pos =
       
 -- completion
 -- NB: completion apparently cannot start with special characters like `#`...
-myCompletion :: CheckResult -> SrcPos -> [(String,Maybe CompletionItemKind)]
+myCompletion :: CheckResult -> SrcPos -> [IDECompletion]
 myCompletion (CheckResult messages nfos usage) pos = 
   case findInnerMost pos nfos of
     Nothing              -> []
-    Just (thisloc,infos) -> case [ () | HasType (ColorT) <- infos ] of
+    Just (thisloc,infos) -> colorCompl infos {- ++ greekCompl infos -}
+
+  where
+
+    mbHead :: [a] -> Maybe a
+    mbHead (x:xs) = Just x
+    mbHead []     = Nothing
+
+{-
+    colorCompl infos = case [ () | HasType (ColorT) <- infos ] of
       []    -> []
       (_:_) -> case [ tok | NfoToken tok <- infos ] of
         []      -> []
-        (tok:_) -> [ (color, Just CiColor) | color <- completeColor (tail tok) ]
-         
+        (tok:_) -> case mbHead tok of
+          Just '#'  -> [ (color, Just CiColor) | color <- completeColor (tail tok) ]
+          _         -> []
+-}
+
+    colorCompl infos = case [ tok | NfoToken tok <- infos ] of
+      []      -> []
+      (tok:_) -> case mbHead tok of
+        Just '#'  -> [ IDECompletion color Nothing (Just CiColor) | color <- completeColor (tail tok) ]
+        _         -> []
+
+--    greekCompl infos = case [ tok | NfoToken tok <- infos ] of
+--      []      -> []
+--      (tok:_) -> case mbHead tok of
+--        Just '\\' -> case completeGreek (tail tok) of
+--                       Left   greeks  -> [ IDECompletion greek  Nothing        (Just CiVariable) | greek <- greeks ]
+--                       Right  replace -> [ IDECompletion tok    (Just replace) (Just CiVariable) ]
+--        _         -> []
+
 --------------------------------------------------------------------------------
 -- recall the definitions from ToyLang
 
