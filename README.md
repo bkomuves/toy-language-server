@@ -73,11 +73,10 @@ Installation instructions (for VS Code)
 $ cabal install lsp
 $ cabal install megaparsec
 ```
-2. Build the server executable:
+2. Build the server executable. This will hopefully build an executable `ToyLang-IDE.exe` and put it somewhere in the path:
 ```
 $ cabal install
 ```
-   This will hopefully build an executable `ToyLang-IDE.exe` and put it somewhere in the path.
 3. Install `npm` (if not already installed)
 4. run the following (in the project directory!):
 ```
