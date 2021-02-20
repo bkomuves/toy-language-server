@@ -2,5 +2,4 @@ node_modules
 package-lock.json
 *.hi
 *.o
-IDE
-IDE.exe
+dist

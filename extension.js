@@ -4,7 +4,8 @@ module.exports = {
   activate(context) {
     
     let path = context.extensionPath;
-    let server_exe = path + '/IDE.exe';
+    // let server_exe = path + '/ToyLang-IDE.exe';
+    let server_exe = 'ToyLang-IDE.exe'
     // console.log(server_exe);
 
     const executable    = { command: server_exe, args: [] };

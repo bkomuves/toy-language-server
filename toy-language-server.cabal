@@ -1,0 +1,47 @@
+Cabal-Version:       2.4
+Name:                toy-language-server
+Version:             0.1
+Synopsis:            Language server (LSP) implementation for toy language
+Description:         Language server (LSP) implementation for toy language
+License:             BSD-3-Clause
+Author:              Balazs Komuves
+Copyright:           (c) 2020-2021 Balazs Komuves
+Maintainer:          bkomuves+hackage@gmail.com
+Homepage:            https://github.com/bkomuves/toy-language-server
+Stability:           Experimental
+Category:            Language
+Tested-With:         GHC == 8.6.5
+Build-Type:          Simple
+
+Source-repository head
+  type:                git
+  location:            https://github.com/bkomuves/toy-language-server
+
+--------------------------------------------------------------------------------
+
+executable ToyLang-IDE.exe
+
+  Build-Depends:       base >= 4 && < 5 , mtl >= 2.0 , stm , 
+                       containers >= 0.5 , 
+                       text >= 1.0 , bytestring >= 0.9.1 ,
+                       filepath , directory , 
+                       megaparsec , deepseq , data-default , 
+                       lens ,
+                       hslogger , rope-utf16-splay , 
+                       haskell-lsp-types >= 0.24 , haskell-lsp >= 0.24
+
+  main-is:             IDE.hs
+
+  other-modules:       LSP
+                       ToyLang
+                       Common
+
+  Default-Language:    Haskell2010
+
+  Default-extensions:  BangPatterns, TypeSynonymInstances, FlexibleInstances, FlexibleContexts
+
+  Other-extensions:    CPP, PatternSynonyms
+
+  Hs-Source-Dirs:      .
+
+--------------------------------------------------------------------------------

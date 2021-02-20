@@ -43,7 +43,6 @@ import           Language.Haskell.LSP.Messages
 import qualified Language.Haskell.LSP.Types       as J
 import qualified Language.Haskell.LSP.Types.Lens  as J
 import           Language.Haskell.LSP.VFS
-
 import qualified Language.Haskell.LSP.Utility     as U
 import qualified System.Log.Logger                as L
 
@@ -267,12 +266,14 @@ sendDiags :: J.NormalizedUri -> Maybe Int -> [Diag] -> R () ()
 sendDiags fileUri version mydiags = do
   let diags = 
         [ J.Diagnostic 
-            (locToRange loc)      -- range 
-            (Just severity)       -- severity
-            Nothing               -- code
-            (Just lspServerName)  -- source
-            (T.pack msg)          -- message
-            Nothing               -- related info
+            { _range    = locToRange loc        -- range 
+            , _severity = Just severity         -- severity
+            , _code     = Nothing               -- code
+            , _source   = Just lspServerName    -- source
+            , _message  = T.pack msg            -- message
+            , _tags     = Nothing               -- tags
+            , _relatedInformation = Nothing     -- related info
+            }
         | Diag loc severity msg <- mydiags
         ]
   publishDiagnostics 100 fileUri version (partitionBySource diags)
