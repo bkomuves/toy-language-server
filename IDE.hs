@@ -33,6 +33,7 @@ myIDE = IDE
   , ideDefinLoc      = myDefinLoc
   , ideCompletion    = myCompletion
   , ideRename        = myRename
+  , ideGetToken      = myGetToken
   }
 
 -- error diagnostics
@@ -46,6 +47,15 @@ myDiag (CheckResult messages nfos usage) = catMaybes $ map worker messages where
     TypeError   text      -> Diag loc DsError text
     Warning     text      -> Diag loc DsWarning text
     ParseErr    text      -> Diag loc DsError $ "cannot parse: " ++ text        
+
+-- find token at location (only used for debugging)
+myGetToken :: CheckResult -> SrcPos -> Maybe (Location,String)
+myGetToken (CheckResult message nfos usage) pos = 
+  case findInnerMost pos nfos of
+    Nothing         -> Nothing
+    Just (loc,list) -> case [ tok | NfoToken tok <- list ] of 
+      []      -> Nothing
+      (tok:_) -> Just (loc,tok)
 
 -- type information when hovering        
 myHover :: CheckResult -> SrcPos -> Maybe (Location,[String])
@@ -96,7 +106,7 @@ myCompletion :: CheckResult -> SrcPos -> [IDECompletion]
 myCompletion (CheckResult messages nfos usage) pos = 
   case findInnerMost pos nfos of
     Nothing              -> []
-    Just (thisloc,infos) -> colorCompl infos {- ++ greekCompl infos -}
+    Just (thisloc,infos) -> colorCompl thisloc infos ++ greekCompl thisloc infos 
 
   where
 
@@ -114,19 +124,17 @@ myCompletion (CheckResult messages nfos usage) pos =
           _         -> []
 -}
 
-    colorCompl infos = case [ tok | NfoToken tok <- infos ] of
+    colorCompl loc infos = case [ tok | NfoToken tok <- infos ] of
       []      -> []
       (tok:_) -> case mbHead tok of
-        Just '#'  -> [ IDECompletion color Nothing (Just CiColor) | color <- completeColor (tail tok) ]
+        Just '#'  -> [ IDECompletion color (Just ('#':color)) (SpecCompletion loc) (Just CiColor) | color <- completeColor (tail tok) ]
         _         -> []
 
---    greekCompl infos = case [ tok | NfoToken tok <- infos ] of
---      []      -> []
---      (tok:_) -> case mbHead tok of
---        Just '\\' -> case completeGreek (tail tok) of
---                       Left   greeks  -> [ IDECompletion greek  Nothing        (Just CiVariable) | greek <- greeks ]
---                       Right  replace -> [ IDECompletion tok    (Just replace) (Just CiVariable) ]
---        _         -> []
+    greekCompl loc infos = case [ tok | NfoToken tok <- infos ] of
+      []      -> []
+      (tok:_) -> case mbHead tok of
+        Just '\\' -> [ IDECompletion label (Just replace) (SpecCompletion loc) (Just CiVariable) | (label,replace) <- completeGreek (tail tok) ]
+        _         -> []
 
 --------------------------------------------------------------------------------
 -- recall the definitions from ToyLang

@@ -38,6 +38,8 @@ import System.FilePath
 import System.Directory
 import System.IO.Unsafe as Unsafe
 
+import qualified Data.ByteString.Lazy.Char8 as L
+
 import qualified Data.Aeson               as J
 import           Language.LSP.Server      as S
 import           Language.LSP.Diagnostics
@@ -56,24 +58,35 @@ import Common
 lspServerName :: T.Text
 lspServerName = T.pack "toy-ide"
 
+lspServerVersion :: T.Text
+lspServerVersion = T.pack "0.1.1"
+
 logging :: Bool
-logging = True
+logging = False -- True
 
 {-# NOINLINE logDir #-}
 logDir :: FilePath
-logDir = Unsafe.unsafePerformIO getTemporaryDirectory 
+logDir = Unsafe.unsafePerformIO getTemporaryDirectory     -- "/tmp/"
 
 logFile        = logDir </> "toy-ide.log"
-sessionLogFile = logDir </> "toy-ide-session.log"
+-- sessionLogFile = logDir </> "toy-ide-session.log"
 
 --------------------------------------------------------------------------------
 -- * our simplified LSP abstraction layer
 
+-- | We need this because of the idiotic vscode shitfest
+data IDECompletionType
+  = NormalCompletion           -- ^ just normal completion
+  | SpecCompletion Location    -- ^ this is used when the completion starts with a special character, and the fucking stupid vscode tokenizer wants to override us + the textedit is also ignored because - surprise - they are fucking stupid!
+  deriving Show
+
 data IDECompletion = IDECompletion
   { ideComplLabel   :: String 
   , ideComplReplace :: Maybe String
+  , ideComplType    :: IDECompletionType
   , ideComplKind    :: Maybe J.CompletionItemKind
   }
+  deriving Show
 
 data IDE result = IDE
   { ideCheckDocument :: T.Text -> result
@@ -83,6 +96,7 @@ data IDE result = IDE
   , ideDefinLoc      :: result -> SrcPos -> Maybe Location
   , ideCompletion    :: result -> SrcPos -> [IDECompletion]
   , ideRename        :: result -> SrcPos -> String -> [(Location,String)]
+  , ideGetToken      :: result -> SrcPos -> Maybe (Location,String)
   }
 
 data Diag = Diag
@@ -143,16 +157,23 @@ defCompletionItem = J.CompletionItem
   }
   
 mkCompletionItem :: IDECompletion -> J.CompletionItem
-mkCompletionItem (IDECompletion label mbreplace mbkind) = case mbreplace of
-  Nothing -> defCompletionItem
-    { J._label = T.pack label   
-    , J._kind  = mbkind
-    }
-  Just replace -> defCompletionItem
-    { J._label      = T.pack label   
-    , J._kind       = mbkind
-    , J._insertText = Just (T.pack replace)
-    }
+mkCompletionItem (IDECompletion label mbreplace typ mbkind) = case mbreplace of
+  Nothing      -> mkCompletionItem (IDECompletion label (Just label) typ mbkind)
+  Just replace -> case typ of
+    NormalCompletion -> defCompletionItem
+      { J._label      = T.pack label   
+      , J._kind       = mbkind
+      , J._insertText = Just (T.pack replace)
+      }
+    SpecCompletion loc -> defCompletionItem
+      { J._label      = T.pack label   
+      , J._kind       = mbkind
+      , J._textEdit   = Just (J.TextEdit (trimRangeBy1 $ locToRange loc) (T.pack replace))
+      , J._additionalTextEdits = Just $ J.List [J.TextEdit (rangeInitialChar $ locToRange loc) (T.empty)] 
+      -- . ^^^ this must be done this way because vscode is fucking stupid and does not allow
+      --       the textedit to be touch anything left of whatever vscode's *own tokenizer* thinks
+      --       is the current token is, which is abso-fucking-ly bollocks - what the alien fuck are they smoking??? 
+      }
 
 --------------------------------------------------------------------------------
 -- * re-check documents
@@ -229,7 +250,9 @@ run ide global = flip E.catches handlers $ do
         }
 
   flip E.finally finalProc $ do
-    setupLogger Nothing ["reactor"] DEBUG
+    if logging
+      then setupLogger (Just logFile) ["reactor"] DEBUG
+      else setupLogger Nothing        ["reactor"] DEBUG
     runServer serverDefinition
 
   where
@@ -265,6 +288,24 @@ locToRange (Location p1 p2) = J.Range (srcPosToPos p1) (srcPosToPos p2)
 
 rangeToLoc :: J.Range -> Location
 rangeToLoc (J.Range p1 p2) = Location (posToSrcPos p1) (posToSrcPos p2) 
+
+--------------------------------------------------------------------------------
+-- fucking stupid vscode textedit completion shitfest
+
+trimRangeBy1 :: J.Range -> J.Range
+trimRangeBy1 (J.Range p1 p2) = J.Range (moveRight p1) p2
+
+rangeInitialChar :: J.Range -> J.Range
+rangeInitialChar (J.Range p _) = J.Range p (moveRight p)
+
+-- extendRangeBy1 :: J.Range -> J.Range
+-- extendRangeBy1 (J.Range p1 p2) = J.Range p1 (moveRight p2)
+
+-- moveRangeBy1 :: J.Range -> J.Range
+-- moveRangeBy1 (J.Range p1 p2) = J.Range (moveRight p1) (moveRight p2)
+
+moveRight :: J.Position -> J.Position
+moveRight (J.Position line col) = J.Position line (col+1)
 
 --------------------------------------------------------------------------------
 
@@ -431,9 +472,10 @@ handle ide global = mconcat
       let J.CompletionParams tdoc pos _workdone _partialrestok _ctx  = req ^. J.params
           doc = req ^. J.params . J.textDocument . J.uri 
           uri = J.toNormalizedUri doc
-      liftIO $ debugM "reactor.handle" $ "completion request at " ++ show (posToSrcPos pos)   
+      mbToken <- ideGetMaybe uri $ \res -> ideGetToken ide res (posToSrcPos pos)
+      let token = case mbToken of { Just (loc,t) -> t ; Nothing -> "" }
+      liftIO $ debugM "reactor.handle" $ "completion request at " ++ show (posToSrcPos pos) ++ " for token `" ++ token ++ "`"
       clist <- ideGetList uri $ \res -> ideCompletion ide res (posToSrcPos pos)
-      -- liftIO $ debugM "reactor.handle" $ "completion list = " ++ show (map fst clist)   
       let items = map mkCompletionItem clist
       let rsp = J.InR (J.CompletionList False (J.List items))
       responder (Right rsp)
@@ -455,8 +497,6 @@ handle ide global = mconcat
       let rsp = J.WorkspaceEdit Nothing $ Just (J.List [docedit])
       responder (Right rsp)  
       -- . ^^^ ResponseResult TextDocumentRename = WorkspaceEdit
-
-
   ]
 
   where
@@ -488,9 +528,18 @@ syncOptions = J.TextDocumentSyncOptions
   , J._save              = Just (J.InL False) 
   }
 
+myServerInfo :: J.ServerInfo 
+myServerInfo = J.ServerInfo
+  { J._name    =      lspServerName
+  , J._version = Just lspServerVersion
+  }
+                                               
+-- Defined in ‘lsp-1.1.1.0:Language.LSP.Server.Core’
 lspOptions :: Options
 lspOptions = def 
-  { textDocumentSync = Just syncOptions
+  { textDocumentSync            = Just syncOptions
+  , completionTriggerCharacters = Just "\\#"
+  , serverInfo                  = Just myServerInfo
 --  , executeCommandCommands = Just ["lsp-hello-command"]
   }
 

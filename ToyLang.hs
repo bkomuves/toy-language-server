@@ -39,7 +39,7 @@ prettyType ty = case ty of
   NatT   -> "Nat"
   ColorT -> "Color"
 
-data Literal 
+data Literal
   = BoolLit  !Bool
   | NatLit   !Integer
   | ColorLit !String
@@ -126,10 +126,8 @@ knownGreekLetters =
   , ( "omega"   , "ω" ) 
   ]
 
-completeGreek :: String -> Either [String] String
-completeGreek str = case filter (\pair -> isPrefixOf str (fst pair)) knownGreekLetters of
-  [(name,letter)]  -> Right letter      
-  pairs            -> Left  (map fst pairs)
+completeGreek :: String -> [(String,String)]
+completeGreek str = filter (\pair -> isPrefixOf str (fst pair)) knownGreekLetters 
 
 --------------------------------------------------------------------------------
 -- * check the whole document
@@ -246,6 +244,7 @@ checkExpr = go where
 
     VarE name -> case Map.lookup name scope of
       Nothing   -> do
+        addInfo    loc (NfoToken   name)
         addMessage loc (NotInScope name)
         return Nothing
       Just (Located defloc ty) -> do
@@ -256,13 +255,15 @@ checkExpr = go where
     LitE lit -> do
       case lit of 
         NatLit n -> do
+          addInfo loc (NfoToken (show n))
           when (n == 0  ) $ addMessage loc (Warning "go back to school, zero is not a number!!!")
           when (n > 1000) $ addMessage loc (Warning "numbers bigger than 1000 do not exist!")
         ColorLit col -> do
           addInfo loc (NfoToken ('#':col))
           unless (elem col knownColors) $ addMessage loc (NotAColor col) 
-          when   (col == "rainbow")     $ addMessage loc (Warning "xxx rainbow is not really a color!")
-        _ -> nop
+          when   (col == "rainbow")     $ addMessage loc (Warning "rainbow is not really a color!")
+        BoolLit b -> do
+          addInfo loc (NfoToken (show b))
       return (Just $ literalType lit)
 
     AddE e1 e2 -> do
@@ -329,7 +330,10 @@ located parser = do
 -- * the language parser
 
 identP :: Parser String
-identP = do
+identP = latexP <|> normalIdentP
+
+normalIdentP :: Parser String
+normalIdentP = do
   x  <- letterChar <|> char '_'
   xs <- many (alphaNumChar <|> char '_')
   return (x:xs)
@@ -349,6 +353,12 @@ colorP = do
   char '#'
   cs <- many (letterChar <|> char '-')
   return cs  
+
+latexP :: Parser String
+latexP = do
+  x  <- char '\\'
+  xs <- option "" identP     -- for completion trigger, we need to parse "\"" itself...
+  return (x:xs)  
   
 literalP :: Parser Literal
 literalP 
@@ -443,6 +453,8 @@ exampleSrc = unlines
   , "" 
   , "ugly_col   : Color = #black"
   , "nice_col   : Color = #rainbow"
+  , ""
+  , "greek      : Nat = \\beta"
   ]
 
 {-

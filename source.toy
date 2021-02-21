@@ -1,0 +1,12 @@
+
+the_truth  : Bool  = True
+the_lie    : Bool  = the_truth
+one        : Nat   = 1
+fiftyfive  : Nat   = 50 + 4 + one
+too_big    : Nat   = 12345 
+bad_number : Nat   = (((666)))
+ugly_col   : Color = #blood-red
+nice_col   : Color = #rainbow
+
+λ     : Nat = 42
+greek : Nat = λ + 1 + β 

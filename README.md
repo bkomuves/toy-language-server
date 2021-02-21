@@ -16,7 +16,7 @@ IDE features
 * variable scope highlighting, shadowing info
 * scope-aware renaming
 * type information on hovering
-* completion (for colors)
+* completion (colors + LaTeX style greek letters)
 * jump to definition
 * ad-hoc diagnostic (warnings for large numbers and rainbow color)
 
