@@ -10,6 +10,8 @@
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE RankNTypes, GADTs, TypeInType #-}
 {-# LANGUAGE TypeOperators, ExplicitNamespaces #-}
+{-# LANGUAGE PatternSynonyms #-}
+
 module LSP where
 
 --------------------------------------------------------------------------------
@@ -59,7 +61,7 @@ lspServerName :: T.Text
 lspServerName = T.pack "toy-ide"
 
 lspServerVersion :: T.Text
-lspServerVersion = T.pack "0.1.1"
+lspServerVersion = T.pack "0.1.2"
 
 logging :: Bool
 logging = False -- True
@@ -149,6 +151,7 @@ defCompletionItem = J.CompletionItem
   , J._filterText = Nothing            -- A string that should be used when filtering a set of completion items. When falsy the label is used.
   , J._insertText = Nothing            -- A string that should be inserted a document when selecting this completion. When falsy the label is used.
   , J._insertTextFormat = Nothing      -- The format of the insert text. The format applies to both the insertText property and the newText property of a provided textEdit.
+  , J._insertTextMode   = Nothing      -- How whitespace and indentation is handled during completion item insertion. If not provided the client's default value depends on the textDocument.completion.insertTextMode client capability.
   , J._textEdit = Nothing              -- An edit which is applied to a document when selecting this completion. When an edit is provided the value of insertText is ignored.
   , J._additionalTextEdits = Nothing   -- An optional array of additional text edits that are applied when selecting this completion. Edits must not overlap with the main edit nor with themselves.
   , J._commitCharacters = Nothing      -- An optional set of characters that when pressed while this completion is active will accept it first and then type that character. *Note* that all commit characters should have `length=1` and that superfluous characters will be ignored.
@@ -168,7 +171,7 @@ mkCompletionItem (IDECompletion label mbreplace typ mbkind) = case mbreplace of
     SpecCompletion loc -> defCompletionItem
       { J._label      = T.pack label   
       , J._kind       = mbkind
-      , J._textEdit   = Just (J.TextEdit (trimRangeBy1 $ locToRange loc) (T.pack replace))
+      , J._textEdit   = Just (J.CompletionEditText $ J.TextEdit (trimRangeBy1 $ locToRange loc) (T.pack replace))
       , J._additionalTextEdits = Just $ J.List [J.TextEdit (rangeInitialChar $ locToRange loc) (T.empty)] 
       -- . ^^^ this must be done this way because vscode is fucking stupid and does not allow
       --       the textedit to be touch anything left of whatever vscode's *own tokenizer* thinks
@@ -237,12 +240,10 @@ run :: forall result. NFData result => IDE result -> MVar (IDETable result) -> I
 run ide global = flip E.catches handlers $ do
   rin  <- atomically newTChan :: IO (TChan ReactorInput)
   let serverDefinition = ServerDefinition
-        { onConfigurationChange = \v -> case J.fromJSON v of
-            J.Error   e -> pure $ Left (T.pack e)
-            J.Success cfg -> do
-              -- sendNotification J.SWindowShowMessage $
-              --  J.ShowMessageParams J.MtInfo $ "Wibble factor set to " <> T.pack (show (wibbleFactor cfg))
-              pure $ Right cfg
+        { defaultConfig = Config
+        , onConfigurationChange = \oldconfig v -> case J.fromJSON v of
+            J.Error   e   -> Left (T.pack e)
+            J.Success cfg -> Right cfg
         , doInitialize = \env _ -> forkIO (reactor rin) >> pure (Right env)
         , staticHandlers = lspHandlers ide global rin
         , interpretHandler = \env -> S.Iso (runLspT env) liftIO
@@ -389,7 +390,10 @@ handle ide global = mconcat
   [ -- initialized notification   
     notificationHandler J.SInitialized $ \_notification -> do
       liftIO $ debugM "reactor.handle" $ "Initialized Notification"
-      -- we could register extra capabilities here, but we are not doing that.
+
+      -- we could register extra capabilities here
+      -- registerTextDocumentContentProvider
+
       return ()
 
     ----------------------------------------------------------------------------
@@ -491,10 +495,14 @@ handle ide global = mconcat
       liftIO $ debugM "reactor.handle" $ "rename request at " ++ show (posToSrcPos pos)   
       list <- ideGetList uri $ \res -> ideRename ide res (posToSrcPos pos) (T.unpack newName)
       -- liftIO $ debugM "reactor.handle" $ "renaming = " ++ show list
-      let edits = J.List [ J.TextEdit (locToRange loc) (T.pack newText) | (loc,newText) <- list ]
+      let edits = J.List [ InL (J.TextEdit (locToRange loc) (T.pack newText)) | (loc,newText) <- list ]
       let vtdoc = J.VersionedTextDocumentIdentifier doc (Just 0) -- Nothing  -- ???
       let docedit = J.InL (J.TextDocumentEdit vtdoc edits) :: J.DocumentChange
-      let rsp = J.WorkspaceEdit Nothing $ Just (J.List [docedit])
+      let rsp = J.WorkspaceEdit 
+                   { J._changes           = Nothing 
+                   , J._documentChanges   = Just (J.List [docedit])
+                   , J._changeAnnotations = Nothing
+                   }
       responder (Right rsp)  
       -- . ^^^ ResponseResult TextDocumentRename = WorkspaceEdit
   ]

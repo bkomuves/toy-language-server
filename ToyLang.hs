@@ -157,6 +157,11 @@ parseAndCheck fname text = computeCheckResult (parseErrs ++ reverse messages) in
   CheckState messages info 
     = execState (checkDeclList emptyScope decls) emptyCheckState
 
+loadAndParseAndCheck :: FilePath -> IO CheckResult
+loadAndParseAndCheck fname = do
+  text <- readFile fname
+  return $ parseAndCheck fname text
+
 --------------------------------------------------------------------------------
 -- * scope \/ type checker
 

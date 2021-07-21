@@ -1,4 +1,5 @@
-{ "scopeName": "source.toy"
+{ "name": "toylang"
+, "scopeName": "source.toy"
 , "fileTypes": [ ".toy" ]
 , "patterns": 
   [ { "include": "#comment"    }
